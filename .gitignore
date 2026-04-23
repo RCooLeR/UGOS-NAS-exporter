@@ -1,0 +1,12 @@
+.idea/
+.vscode/
+.DS_Store
+bin/
+dist/
+coverage.out
+*.test
+ugos-exporter
+ugos-exporter.exe
+*.log
+metrics.txt
+

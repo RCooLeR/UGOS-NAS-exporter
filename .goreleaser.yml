@@ -1,0 +1,63 @@
+version: 2
+
+project_name: ugos-exporter
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ugos-exporter
+    main: .
+    binary: ugos-exporter
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }} -X main.date={{ .Date }}
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+release:
+  prerelease: auto
+
+changelog:
+  use: git
+
+dockers_v2:
+  - id: dockerhub
+    ids:
+      - ugos-exporter
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - rcooler/ugos_exporter
+    tags:
+      - "{{ .Version }}"
+      - "{{ if and (not .IsSnapshot) (not .Prerelease) }}latest{{ end }}"
+      - "{{ if and (not .IsSnapshot) (not .Prerelease) }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if and (not .IsSnapshot) (not .Prerelease) }}{{ .Major }}{{ end }}"
+    labels:
+      org.opencontainers.image.title: ugos-exporter
+      org.opencontainers.image.description: Lightweight UGOS and Docker metrics exporter for NAS hosts and Compose stacks
+      org.opencontainers.image.url: "{{ .GitURL }}"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+docker_digest:
+  name_template: digests.txt
+

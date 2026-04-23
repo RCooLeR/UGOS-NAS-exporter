@@ -1,0 +1,12 @@
+FROM gcr.io/distroless/static-debian12:latest
+
+ARG TARGETPLATFORM
+
+WORKDIR /
+
+COPY $TARGETPLATFORM/ugos-exporter /usr/local/bin/ugos-exporter
+
+EXPOSE 9877
+
+ENTRYPOINT ["/usr/local/bin/ugos-exporter"]
+

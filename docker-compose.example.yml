@@ -1,0 +1,45 @@
+services:
+  ugos-exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ugos-exporter
+    restart: unless-stopped
+    # Optional for intel_gpu_top on Intel iGPU hosts:
+    # privileged: true
+    # pid: host
+    ports:
+      - "9877:9877"
+    environment:
+      UGOS_EXPORTER_LISTEN_ADDRESS: ":9877"
+      UGOS_EXPORTER_DOCKER_HOST: "unix:///var/run/docker.sock"
+      UGOS_EXPORTER_SCRAPE_INTERVAL: "15s"
+      UGOS_EXPORTER_HOST_METRICS_ENABLED: "true"
+      UGOS_EXPORTER_HOST_PROCFS: "/host/proc"
+      UGOS_EXPORTER_HOST_SYSFS: "/host/sys"
+      UGOS_EXPORTER_HOST_NAME: "ugreen-nas"
+      UGOS_EXPORTER_HOST_HOSTNAME_PATH: "/rootfs/etc/hostname"
+      UGOS_EXPORTER_HOST_FILESYSTEMS: "/:/rootfs,/volume1:/volume1,/volume2:/volume2"
+      UGOS_EXPORTER_HOST_DRI_PATH: "/dev/dri"
+      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED: "true"
+      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_DEVICE: "drm:/dev/dri/renderD128"
+      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PERIOD: "1s"
+      UGOS_EXPORTER_MQTT_ENABLED: "true"
+      UGOS_EXPORTER_MQTT_BROKER: "tcp://host.docker.internal:1883"
+      UGOS_EXPORTER_MQTT_USER: "ha"
+      UGOS_EXPORTER_MQTT_PASS: "change_me"
+      UGOS_EXPORTER_MQTT_CLIENT_ID: "ugos_exporter"
+      UGOS_EXPORTER_MQTT_TOPIC_PREFIX: "ugos_exporter"
+      UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX: "homeassistant"
+      UGOS_EXPORTER_MQTT_INTERVAL: "60"
+      UGOS_EXPORTER_MQTT_RETAIN: "true"
+      UGOS_EXPORTER_MQTT_EXPIRE_AFTER: "360"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /volume1:/volume1:ro
+      - /volume2:/volume2:ro
+      - /dev/dri:/dev/dri
+

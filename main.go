@@ -1,0 +1,382 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	cli "github.com/urfave/cli/v2"
+
+	dockercollector "github.com/RCooLeR/ugos-exporter/internal/collectors/docker"
+	hostcollector "github.com/RCooLeR/ugos-exporter/internal/collectors/host"
+	"github.com/RCooLeR/ugos-exporter/internal/dockerapi"
+	mqttoutput "github.com/RCooLeR/ugos-exporter/internal/outputs/mqtt"
+	prometheusoutput "github.com/RCooLeR/ugos-exporter/internal/outputs/prometheus"
+)
+
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+func main() {
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+
+	app := &cli.App{
+		Name:    "ugos-exporter",
+		Usage:   "Export UGOS host and Docker stack metrics to Prometheus and MQTT/Home Assistant",
+		Version: buildVersion(),
+		Flags:   buildFlags(),
+		Action: func(c *cli.Context) error {
+			cfg, err := configFromCLI(c)
+			if err != nil {
+				return err
+			}
+			return run(cfg)
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal().Err(err).Msg("exporter stopped")
+	}
+}
+
+func buildVersion() string {
+	return fmt.Sprintf("%s (commit=%s, date=%s)", version, commit, date)
+}
+
+type config struct {
+	ListenAddress          string
+	MetricsPath            string
+	ScrapeInterval         time.Duration
+	DockerHost             string
+	DockerTimeout          time.Duration
+	ProjectLabel           string
+	StandaloneProjectName  string
+	ContainerConcurrency   int
+	MQTTEnabled            bool
+	MQTTBroker             string
+	MQTTClientID           string
+	MQTTUsername           string
+	MQTTPassword           string
+	MQTTTopicPrefix        string
+	DiscoveryPrefix        string
+	MQTTQoS                byte
+	MQTTRetain             bool
+	MQTTInterval           time.Duration
+	MQTTConnectTimeout     time.Duration
+	HomeAssistantExpiresIn time.Duration
+	HostMetricsEnabled     bool
+	HostProcFS             string
+	HostSysFS              string
+	HostNameOverride       string
+	HostHostnamePath       string
+	HostFilesystems        []hostcollector.FilesystemMount
+	HostDRIPath            string
+	HostIntelGPUTopEnabled bool
+	HostIntelGPUTopPath    string
+	HostIntelGPUTopDevice  string
+	HostIntelGPUTopPeriod  time.Duration
+}
+
+func buildFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "listen-address", Value: ":9877", EnvVars: []string{"UGOS_EXPORTER_LISTEN_ADDRESS", "LISTEN_ADDRESS"}},
+		&cli.StringFlag{Name: "metrics-path", Value: "/metrics", EnvVars: []string{"UGOS_EXPORTER_METRICS_PATH", "METRICS_PATH"}},
+		&cli.DurationFlag{Name: "scrape-interval", Value: 15 * time.Second, EnvVars: []string{"UGOS_EXPORTER_SCRAPE_INTERVAL", "SCRAPE_INTERVAL"}},
+		&cli.StringFlag{Name: "docker-host", Value: "unix:///var/run/docker.sock", EnvVars: []string{"UGOS_EXPORTER_DOCKER_HOST", "DOCKER_HOST"}},
+		&cli.DurationFlag{Name: "docker-timeout", Value: 5 * time.Second, EnvVars: []string{"UGOS_EXPORTER_DOCKER_TIMEOUT", "DOCKER_TIMEOUT"}},
+		&cli.StringFlag{Name: "project-label", Value: "com.docker.compose.project", EnvVars: []string{"UGOS_EXPORTER_PROJECT_LABEL", "DOCKER_PROJECT_LABEL"}},
+		&cli.StringFlag{Name: "standalone-project-name", Value: "standalone", EnvVars: []string{"UGOS_EXPORTER_STANDALONE_PROJECT_NAME", "STANDALONE_PROJECT_NAME"}},
+		&cli.IntFlag{Name: "container-concurrency", Value: 4, EnvVars: []string{"UGOS_EXPORTER_CONTAINER_CONCURRENCY", "CONTAINER_CONCURRENCY"}},
+		&cli.BoolFlag{Name: "mqtt-enabled", EnvVars: []string{"UGOS_EXPORTER_MQTT_ENABLED"}},
+		&cli.StringFlag{Name: "mqtt-broker", EnvVars: []string{"UGOS_EXPORTER_MQTT_BROKER", "MQTT_BROKER"}},
+		&cli.StringFlag{Name: "mqtt-client-id", Value: "ugos-exporter", EnvVars: []string{"UGOS_EXPORTER_MQTT_CLIENT_ID", "MQTT_CLIENT_ID"}},
+		&cli.StringFlag{Name: "mqtt-username", EnvVars: []string{"UGOS_EXPORTER_MQTT_USER", "MQTT_USERNAME"}},
+		&cli.StringFlag{Name: "mqtt-password", EnvVars: []string{"UGOS_EXPORTER_MQTT_PASS", "MQTT_PASSWORD"}},
+		&cli.StringFlag{Name: "mqtt-topic-prefix", Value: "ugos_exporter", EnvVars: []string{"UGOS_EXPORTER_MQTT_TOPIC_PREFIX", "MQTT_TOPIC_PREFIX"}},
+		&cli.StringFlag{Name: "homeassistant-discovery-prefix", Value: "homeassistant", EnvVars: []string{"UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX", "HOMEASSISTANT_DISCOVERY_PREFIX"}},
+		&cli.UintFlag{Name: "mqtt-qos", Value: 1, EnvVars: []string{"UGOS_EXPORTER_MQTT_QOS", "MQTT_QOS"}},
+		&cli.BoolFlag{Name: "mqtt-retain", Value: true, EnvVars: []string{"UGOS_EXPORTER_MQTT_RETAIN", "MQTT_RETAIN"}},
+		&cli.StringFlag{Name: "mqtt-interval", Value: "15s", EnvVars: []string{"UGOS_EXPORTER_MQTT_INTERVAL"}},
+		&cli.DurationFlag{Name: "mqtt-connect-timeout", Value: 10 * time.Second, EnvVars: []string{"UGOS_EXPORTER_MQTT_CONNECT_TIMEOUT", "MQTT_CONNECT_TIMEOUT"}},
+		&cli.StringFlag{Name: "homeassistant-expire-after", Value: "45s", EnvVars: []string{"UGOS_EXPORTER_MQTT_EXPIRE_AFTER", "HOMEASSISTANT_EXPIRE_AFTER"}},
+		&cli.BoolFlag{Name: "host-metrics-enabled", EnvVars: []string{"UGOS_EXPORTER_HOST_METRICS_ENABLED", "HOST_METRICS_ENABLED"}},
+		&cli.StringFlag{Name: "host-procfs", Value: "/host/proc", EnvVars: []string{"UGOS_EXPORTER_HOST_PROCFS", "HOST_PROCFS"}},
+		&cli.StringFlag{Name: "host-sysfs", Value: "/host/sys", EnvVars: []string{"UGOS_EXPORTER_HOST_SYSFS", "HOST_SYSFS"}},
+		&cli.StringFlag{Name: "host-name", EnvVars: []string{"UGOS_EXPORTER_HOST_NAME", "HOST_NAME"}},
+		&cli.StringFlag{Name: "host-hostname-path", Value: "/rootfs/etc/hostname", EnvVars: []string{"UGOS_EXPORTER_HOST_HOSTNAME_PATH", "HOST_HOSTNAME_PATH"}},
+		&cli.StringFlag{Name: "host-filesystems", Value: "/:/rootfs,/volume1:/volume1,/volume2:/volume2", EnvVars: []string{"UGOS_EXPORTER_HOST_FILESYSTEMS", "HOST_FILESYSTEMS"}},
+		&cli.StringFlag{Name: "host-dri-path", Value: "/dev/dri", EnvVars: []string{"UGOS_EXPORTER_HOST_DRI_PATH", "HOST_DRI_PATH"}},
+		&cli.BoolFlag{Name: "host-intel-gpu-top-enabled", EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED"}},
+		&cli.StringFlag{Name: "host-intel-gpu-top-path", Value: "intel_gpu_top", EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PATH"}},
+		&cli.StringFlag{Name: "host-intel-gpu-top-device", EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_DEVICE"}},
+		&cli.DurationFlag{Name: "host-intel-gpu-top-period", Value: time.Second, EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PERIOD"}},
+	}
+}
+
+func configFromCLI(c *cli.Context) (config, error) {
+	qos := c.Uint("mqtt-qos")
+	if qos > 2 {
+		return config{}, fmt.Errorf("mqtt-qos must be 0, 1, or 2")
+	}
+	concurrency := c.Int("container-concurrency")
+	if concurrency < 1 {
+		return config{}, fmt.Errorf("container-concurrency must be at least 1")
+	}
+	mqttInterval, err := parseFlexibleDuration(c.String("mqtt-interval"))
+	if err != nil {
+		return config{}, fmt.Errorf("mqtt-interval: %w", err)
+	}
+	expireAfter, err := parseFlexibleDuration(c.String("homeassistant-expire-after"))
+	if err != nil {
+		return config{}, fmt.Errorf("homeassistant-expire-after: %w", err)
+	}
+	if mqttInterval <= 0 {
+		return config{}, fmt.Errorf("mqtt-interval must be greater than zero")
+	}
+	if expireAfter <= 0 {
+		return config{}, fmt.Errorf("homeassistant-expire-after must be greater than zero")
+	}
+	hostFilesystems, err := parseFilesystemMounts(c.String("host-filesystems"))
+	if err != nil {
+		return config{}, fmt.Errorf("host-filesystems: %w", err)
+	}
+
+	return config{
+		ListenAddress:          c.String("listen-address"),
+		MetricsPath:            c.String("metrics-path"),
+		ScrapeInterval:         c.Duration("scrape-interval"),
+		DockerHost:             c.String("docker-host"),
+		DockerTimeout:          c.Duration("docker-timeout"),
+		ProjectLabel:           c.String("project-label"),
+		StandaloneProjectName:  c.String("standalone-project-name"),
+		ContainerConcurrency:   concurrency,
+		MQTTEnabled:            c.Bool("mqtt-enabled"),
+		MQTTBroker:             c.String("mqtt-broker"),
+		MQTTClientID:           c.String("mqtt-client-id"),
+		MQTTUsername:           c.String("mqtt-username"),
+		MQTTPassword:           c.String("mqtt-password"),
+		MQTTTopicPrefix:        c.String("mqtt-topic-prefix"),
+		DiscoveryPrefix:        c.String("homeassistant-discovery-prefix"),
+		MQTTQoS:                byte(qos),
+		MQTTRetain:             c.Bool("mqtt-retain"),
+		MQTTInterval:           mqttInterval,
+		MQTTConnectTimeout:     c.Duration("mqtt-connect-timeout"),
+		HomeAssistantExpiresIn: expireAfter,
+		HostMetricsEnabled:     c.Bool("host-metrics-enabled"),
+		HostProcFS:             c.String("host-procfs"),
+		HostSysFS:              c.String("host-sysfs"),
+		HostNameOverride:       c.String("host-name"),
+		HostHostnamePath:       c.String("host-hostname-path"),
+		HostFilesystems:        hostFilesystems,
+		HostDRIPath:            c.String("host-dri-path"),
+		HostIntelGPUTopEnabled: c.Bool("host-intel-gpu-top-enabled"),
+		HostIntelGPUTopPath:    c.String("host-intel-gpu-top-path"),
+		HostIntelGPUTopDevice:  c.String("host-intel-gpu-top-device"),
+		HostIntelGPUTopPeriod:  c.Duration("host-intel-gpu-top-period"),
+	}, nil
+}
+
+func run(cfg config) error {
+	logger := log.With().Str("listen", cfg.ListenAddress).Str("docker_host", cfg.DockerHost).Logger()
+
+	registry := prometheus.NewRegistry()
+	metrics := prometheusoutput.NewMetrics(registry)
+
+	dockerClient, err := dockerapi.NewClient(cfg.DockerHost, cfg.DockerTimeout)
+	if err != nil {
+		return err
+	}
+
+	dockerCollector := dockercollector.New(dockerClient, dockercollector.Config{
+		ProjectLabel:          cfg.ProjectLabel,
+		StandaloneProjectName: cfg.StandaloneProjectName,
+		ContainerConcurrency:  cfg.ContainerConcurrency,
+		Log:                   logger,
+	})
+
+	var hostCollector *hostcollector.Collector
+	if cfg.HostMetricsEnabled {
+		hostCollector, err = hostcollector.New(hostcollector.Config{
+			ProcFS:             cfg.HostProcFS,
+			SysFS:              cfg.HostSysFS,
+			HostnameOverride:   cfg.HostNameOverride,
+			HostnamePath:       cfg.HostHostnamePath,
+			Filesystems:        cfg.HostFilesystems,
+			DRIPath:            cfg.HostDRIPath,
+			IntelGPUTopEnabled: cfg.HostIntelGPUTopEnabled,
+			IntelGPUTopPath:    cfg.HostIntelGPUTopPath,
+			IntelGPUTopDevice:  cfg.HostIntelGPUTopDevice,
+			IntelGPUTopPeriod:  cfg.HostIntelGPUTopPeriod,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	mqttEnabled := cfg.MQTTEnabled || cfg.MQTTBroker != ""
+
+	var publisher *mqttoutput.MQTTPublisher
+	if mqttEnabled {
+		if cfg.MQTTBroker == "" {
+			return fmt.Errorf("mqtt is enabled but mqtt-broker is empty")
+		}
+		publisher, err = mqttoutput.NewMQTTPublisher(mqttoutput.MQTTConfig{
+			Broker:             cfg.MQTTBroker,
+			ClientID:           cfg.MQTTClientID,
+			Username:           cfg.MQTTUsername,
+			Password:           cfg.MQTTPassword,
+			TopicPrefix:        cfg.MQTTTopicPrefix,
+			DiscoveryPrefix:    cfg.DiscoveryPrefix,
+			QoS:                cfg.MQTTQoS,
+			Retain:             cfg.MQTTRetain,
+			ConnectTimeout:     cfg.MQTTConnectTimeout,
+			ExpireAfterSeconds: int(cfg.HomeAssistantExpiresIn.Seconds()),
+			Log:                logger,
+		})
+		if err != nil {
+			return err
+		}
+		defer publisher.Close()
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle(cfg.MetricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{EnableOpenMetrics: true}))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	server := &http.Server{
+		Addr:              cfg.ListenAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serverErr := make(chan error, 1)
+	go func() {
+		logger.Info().Str("path", cfg.MetricsPath).Msg("starting HTTP server")
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- err
+			return
+		}
+		serverErr <- nil
+	}()
+
+	ticker := time.NewTicker(cfg.ScrapeInterval)
+	defer ticker.Stop()
+	lastMQTTPublish := time.Time{}
+
+	collectOnce := func() {
+		snapshot, collectErr := dockerCollector.Collect(ctx)
+		if hostCollector != nil {
+			hostSnapshot, hostErr := hostCollector.Collect(ctx)
+			if hostErr != nil {
+				collectErr = errors.Join(collectErr, hostErr)
+			} else {
+				snapshot.Host = &hostSnapshot
+			}
+		}
+		if snapshot.Host != nil {
+			snapshot.Host.Name = preferredHostName(snapshot.Host.Name, cfg.HostNameOverride)
+		}
+		metrics.Update(snapshot, collectErr)
+		if collectErr != nil {
+			logger.Error().Err(collectErr).Msg("collection failed")
+			return
+		}
+
+		if publisher != nil && (lastMQTTPublish.IsZero() || time.Since(lastMQTTPublish) >= cfg.MQTTInterval) {
+			if err := publisher.PublishSnapshot(snapshot); err != nil {
+				logger.Error().Err(err).Msg("failed to publish snapshot to MQTT")
+			} else {
+				lastMQTTPublish = time.Now()
+			}
+		}
+	}
+
+	collectOnce()
+
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return server.Shutdown(shutdownCtx)
+		case err := <-serverErr:
+			return err
+		case <-ticker.C:
+			collectOnce()
+		}
+	}
+}
+
+func parseFlexibleDuration(raw string) (time.Duration, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("value is empty")
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("use Go duration format like 15s or plain seconds like 60")
+	}
+	return duration, nil
+}
+
+func preferredHostName(current string, override string) string {
+	if value := strings.TrimSpace(override); value != "" {
+		return value
+	}
+	return current
+}
+
+func parseFilesystemMounts(raw string) ([]hostcollector.FilesystemMount, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]hostcollector.FilesystemMount, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+
+		pieces := strings.SplitN(item, ":", 2)
+		if len(pieces) != 2 {
+			return nil, fmt.Errorf("invalid mapping %q, expected host_path:container_path", item)
+		}
+		name := strings.TrimSpace(pieces[0])
+		containerPath := strings.TrimSpace(pieces[1])
+		if name == "" || containerPath == "" {
+			return nil, fmt.Errorf("invalid mapping %q, host and container paths must be set", item)
+		}
+		result = append(result, hostcollector.FilesystemMount{
+			Name:          name,
+			ContainerPath: containerPath,
+		})
+	}
+	return result, nil
+}
