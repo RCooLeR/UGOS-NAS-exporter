@@ -1,0 +1,38 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="48" y1="56" x2="464" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A" />
+      <stop offset="0.52" stop-color="#1D4ED8" />
+      <stop offset="1" stop-color="#06B6D4" />
+    </linearGradient>
+    <linearGradient id="house" x1="116" y1="140" x2="402" y2="410" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.98" />
+      <stop offset="1" stop-color="#DDEBFF" stop-opacity="0.94" />
+    </linearGradient>
+    <linearGradient id="accent" x1="242" y1="218" x2="364" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F59E0B" />
+      <stop offset="1" stop-color="#F97316" />
+    </linearGradient>
+    <filter id="shadow" x="40" y="52" width="432" height="424" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.26" />
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="124" fill="url(#bg)" />
+  <circle cx="412" cy="112" r="46" fill="#FFFFFF" fill-opacity="0.14" />
+  <circle cx="112" cy="418" r="58" fill="#FFFFFF" fill-opacity="0.08" />
+
+  <g filter="url(#shadow)">
+    <path d="M98 224L256 102L414 224V376C414 399.196 395.196 418 372 418H140C116.804 418 98 399.196 98 376V224Z" fill="url(#house)" />
+    <path d="M74 230L256 88L438 230" stroke="#F8FBFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <path d="M152 362C152 349.297 162.297 339 175 339H214V412H152V362Z" fill="#C9DDFF" />
+  <path d="M232 294C232 281.297 242.297 271 255 271H296V412H232V294Z" fill="#7DB5FF" />
+  <path d="M314 240C314 227.297 324.297 217 337 217H368V412H314V240Z" fill="url(#accent)" />
+  <path d="M154 422H368" stroke="#D0E2FF" stroke-width="14" stroke-linecap="round" />
+
+  <path d="M188 198L226 168L261 196L332 148" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M332 148V178" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round" />
+  <path d="M332 148H302" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round" />
+</svg>

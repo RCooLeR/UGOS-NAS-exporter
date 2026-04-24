@@ -210,6 +210,15 @@ services:
 
 Full example file: [docker-compose.example.yml](docker-compose.example.yml)
 
+## Home Assistant Cards
+
+Two Lovelace cards now live under [ha-cards/README.md](ha-cards/README.md):
+
+- `ha-cards/detailed` - full NAS dashboard
+- `ha-cards/small` - compact overview card
+
+Both build to minified production bundles under their own `dist/` directories.
+
 ## Configuration
 
 Flags and env vars:
@@ -319,4 +328,3 @@ Local snapshot test:
 ```bash
 goreleaser release --snapshot --clean
 ```
-

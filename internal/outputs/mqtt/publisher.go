@@ -108,6 +108,10 @@ var diskSensors = map[string]sensorDefinition{
 	"write_bps": {NameSuffix: "Write Throughput", ObjectID: "write_bytes_per_second", ValueKey: "write_bytes_per_second", Unit: "B/s", Icon: "mdi:upload", DeviceClass: "data_rate", StateClass: "measurement"},
 	"busy":      {NameSuffix: "Busy", ObjectID: "busy_percent", ValueKey: "busy_percent", Unit: "%", Icon: "mdi:harddisk", StateClass: "measurement"},
 	"size":      {NameSuffix: "Size", ObjectID: "size_bytes", ValueKey: "size_bytes", Unit: "B", Icon: "mdi:database", DeviceClass: "data_size", StateClass: "measurement"},
+	"model":     {NameSuffix: "Model", ObjectID: "model", ValueKey: "model", Icon: "mdi:information-outline"},
+	"vendor":    {NameSuffix: "Vendor", ObjectID: "vendor", ValueKey: "vendor", Icon: "mdi:factory"},
+	"serial":    {NameSuffix: "Serial", ObjectID: "serial", ValueKey: "serial", Icon: "mdi:barcode"},
+	"type":      {NameSuffix: "Media", ObjectID: "media_type", ValueKey: "type", Icon: "mdi:harddisk-plus"},
 }
 
 var networkSensors = map[string]sensorDefinition{
@@ -132,8 +136,11 @@ var bondSlaveSensors = map[string]sensorDefinition{
 
 var arraySensors = map[string]sensorDefinition{
 	"degraded": {NameSuffix: "Degraded Disks", ObjectID: "degraded_disks", ValueKey: "degraded_disks", Icon: "mdi:alert", StateClass: "measurement"},
+	"active":   {NameSuffix: "Active Disks", ObjectID: "active_disks", ValueKey: "active_disks", Icon: "mdi:harddisk", StateClass: "measurement"},
+	"total":    {NameSuffix: "Total Disks", ObjectID: "total_disks", ValueKey: "total_disks", Icon: "mdi:harddisk-plus", StateClass: "measurement"},
 	"sync":     {NameSuffix: "Sync Progress", ObjectID: "sync_completed_percent", ValueKey: "sync_completed_percent", Unit: "%", Icon: "mdi:progress-clock", StateClass: "measurement"},
 	"size":     {NameSuffix: "Size", ObjectID: "size_bytes", ValueKey: "size_bytes", Unit: "B", Icon: "mdi:database", DeviceClass: "data_size", StateClass: "measurement"},
+	"level":    {NameSuffix: "Level", ObjectID: "level", ValueKey: "level", Icon: "mdi:layers-triple-outline"},
 }
 
 var gpuSensors = map[string]sensorDefinition{
@@ -458,6 +465,9 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 			"write_bytes_per_second": disk.WriteBytesPerSec,
 			"busy_percent":           disk.BusyPercent,
 			"size_bytes":             disk.SizeBytes,
+			"model":                  disk.Model,
+			"vendor":                 disk.Vendor,
+			"serial":                 disk.Serial,
 			"type":                   disk.Type,
 			"collected_at":           snapshot.CollectedAt.Format(time.RFC3339),
 		}
@@ -630,6 +640,8 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 		payload := map[string]any{
 			"name":                   array.Name,
 			"degraded_disks":         array.DegradedDisks,
+			"active_disks":           array.DisksActive,
+			"total_disks":            array.DisksTotal,
 			"sync_completed_percent": array.SyncCompletedPercent,
 			"size_bytes":             array.SizeBytes,
 			"state":                  array.State,

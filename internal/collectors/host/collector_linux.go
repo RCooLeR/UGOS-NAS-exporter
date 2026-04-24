@@ -31,12 +31,12 @@ type FilesystemMount struct {
 }
 
 type Config struct {
-	ProcFS           string
-	SysFS            string
-	HostnamePath     string
-	HostnameOverride string
-	Filesystems      []FilesystemMount
-	DRIPath          string
+	ProcFS             string
+	SysFS              string
+	HostnamePath       string
+	HostnameOverride   string
+	Filesystems        []FilesystemMount
+	DRIPath            string
 	IntelGPUTopEnabled bool
 	IntelGPUTopPath    string
 	IntelGPUTopDevice  string
@@ -159,7 +159,7 @@ func (c *Collector) Collect(_ context.Context) (model.HostSnapshot, error) {
 	if err != nil {
 		return model.HostSnapshot{}, fmt.Errorf("read /proc/meminfo: %w", err)
 	}
-	netdev, err := c.proc.NetDev()
+	netdev, err := c.readNetDev()
 	if err != nil {
 		return model.HostSnapshot{}, fmt.Errorf("read /proc/net/dev: %w", err)
 	}
@@ -512,6 +512,20 @@ func (c *Collector) collectArrays(mdstats []procfs.MDStat, mounts map[string]mou
 
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+func (c *Collector) readNetDev() (procfs.NetDev, error) {
+	if trimmed := strings.TrimSpace(c.cfg.ProcFS); trimmed != "" {
+		hostInitFS, err := procfs.NewFS(filepath.Join(trimmed, "1"))
+		if err == nil {
+			netdev, netErr := hostInitFS.NetDev()
+			if netErr == nil && len(netdev) > 0 {
+				return netdev, nil
+			}
+		}
+	}
+
+	return c.proc.NetDev()
 }
 
 func (c *Collector) collectNetworksLocked(now time.Time, netdev procfs.NetDev) []model.NetworkSnapshot {

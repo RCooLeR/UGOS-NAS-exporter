@@ -1,5 +1,6 @@
 .idea/
 .vscode/
+.ai/
 .DS_Store
 bin/
 dist/
@@ -9,4 +10,11 @@ ugos-exporter
 ugos-exporter.exe
 *.log
 metrics.txt
+ha-cards/**/node_modules/
+ha-cards/**/.vite/
+ha-cards/**/original request.txt
+!ha-cards/detailed/dist/
+!ha-cards/detailed/dist/**
+!ha-cards/small/dist/
+!ha-cards/small/dist/**
 

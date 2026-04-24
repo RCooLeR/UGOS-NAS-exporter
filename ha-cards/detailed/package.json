@@ -1,0 +1,23 @@
+{
+  "name": "ugreen-nas-card",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Large Lovelace custom card for UGREEN DXP6800 Pro NAS monitoring",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mdi/js": "^7.4.47",
+    "lit": "^3.3.2",
+    "simple-icons": "^15.17.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.9"
+  }
+}
