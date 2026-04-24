@@ -1,6 +1,10 @@
-FROM gcr.io/distroless/static-debian12:latest
+FROM debian:bookworm-slim
 
 ARG TARGETPLATFORM
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates intel-gpu-tools \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
 

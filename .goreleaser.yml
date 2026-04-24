@@ -40,7 +40,7 @@ dockers_v2:
       - ugos-exporter
     dockerfile: Dockerfile.goreleaser
     images:
-      - rcooler/ugos_exporter
+      - rcooler/ugos-exporter
     tags:
       - "{{ .Version }}"
       - "{{ if and (not .IsSnapshot) (not .Prerelease) }}latest{{ end }}"

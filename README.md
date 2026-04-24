@@ -99,7 +99,7 @@ docker build -t ugos-exporter:latest .
 Published Docker Hub image:
 
 ```bash
-docker pull rcooler/ugos_exporter:latest
+docker pull rcooler/ugos-exporter:latest
 ```
 
 Docker Compose example:
@@ -125,7 +125,7 @@ docker run -d \
   --name ugos-exporter \
   -p 9877:9877 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  rcooler/ugos_exporter:latest
+  rcooler/ugos-exporter:latest
 ```
 
 With NAS host metrics, MQTT, and Home Assistant discovery:
@@ -158,7 +158,7 @@ docker run -d \
   -e UGOS_EXPORTER_MQTT_INTERVAL=60 \
   -e UGOS_EXPORTER_MQTT_RETAIN=true \
   -e UGOS_EXPORTER_MQTT_EXPIRE_AFTER=360 \
-  rcooler/ugos_exporter:latest
+  rcooler/ugos-exporter:latest
 ```
 
 Docker Compose:
@@ -315,13 +315,13 @@ Projects are detected from the label `com.docker.compose.project` by default. Co
 
 ## Release
 
-GoReleaser is configured in `.goreleaser.yml` to publish multi-arch Docker images for `linux/amd64` and `linux/arm64` to Docker Hub as `rcooler/ugos_exporter`.
+GoReleaser is configured in `.goreleaser.yml` to publish multi-arch Docker images for `linux/amd64` and `linux/arm64` to Docker Hub as `rcooler/ugos-exporter`.
 
 GitHub Actions release workflow:
 
 - Add repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
-- Push a semver tag such as `v0.1.0`
-- The workflow publishes Docker tags like `0.1.0`, `latest`, `0.1`, and `0`
+- Push a semver tag such as `v1.0.0`
+- The workflow publishes Docker tags like `1.0.0`, `latest`, `1.0`, and `1`
 
 Local snapshot test:
 
