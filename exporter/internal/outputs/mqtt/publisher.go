@@ -11,7 +11,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 
-	"github.com/RCooLeR/ugos-exporter/internal/model"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
 )
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
@@ -95,6 +95,13 @@ var hostSensors = map[string]sensorDefinition{
 	"memorypct": {NameSuffix: "Memory Used", ObjectID: "memory_used_percent", ValueKey: "memory_used_percent", Unit: "%", Icon: "mdi:memory", StateClass: "measurement"},
 	"swappct":   {NameSuffix: "Swap Used", ObjectID: "swap_used_percent", ValueKey: "swap_used_percent", Unit: "%", Icon: "mdi:swap-horizontal", StateClass: "measurement"},
 	"uptime":    {NameSuffix: "Uptime", ObjectID: "uptime_seconds", ValueKey: "uptime_seconds", Unit: "s", Icon: "mdi:clock-outline", DeviceClass: "duration", StateClass: "measurement"},
+}
+
+var processSensors = map[string]sensorDefinition{
+	"count":    {NameSuffix: "Process Count", ObjectID: "process_count", ValueKey: "process_count", Icon: "mdi:counter", StateClass: "measurement"},
+	"cpu":      {NameSuffix: "CPU", ObjectID: "cpu_usage_percent", ValueKey: "cpu_usage_percent", Unit: "%", Icon: "mdi:cpu-64-bit", StateClass: "measurement"},
+	"memory":   {NameSuffix: "Memory", ObjectID: "memory_usage_bytes", ValueKey: "memory_usage_bytes", Unit: "B", Icon: "mdi:memory", DeviceClass: "data_size", StateClass: "measurement"},
+	"cpu_time": {NameSuffix: "CPU Time", ObjectID: "cpu_time_seconds", ValueKey: "cpu_time_seconds", Unit: "s", Icon: "mdi:timer-outline", StateClass: "measurement"},
 }
 
 var filesystemSensors = map[string]sensorDefinition{
@@ -293,10 +300,12 @@ func (p *MQTTPublisher) publishProjects(snapshot model.Snapshot, currentEntities
 		stateTopic := fmt.Sprintf("%s/projects/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
 		payload := map[string]any{
 			"project":            project.Name,
+			"project_slug":       slug,
 			"cpu_usage_percent":  project.CPUPercent,
 			"memory_usage_bytes": project.MemoryUsageBytes,
 			"total_containers":   project.TotalContainers,
 			"running_containers": project.RunningContainers,
+			"containers":         projectContainerAttributes(snapshot.Containers, project.Name),
 			"collected_at":       snapshot.CollectedAt.Format(time.RFC3339),
 		}
 		if err := p.publishJSON(stateTopic, payload); err != nil {
@@ -325,8 +334,10 @@ func (p *MQTTPublisher) publishContainers(snapshot model.Snapshot, currentEntiti
 		stateTopic := fmt.Sprintf("%s/containers/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
 		payload := map[string]any{
 			"container":          container.Name,
+			"container_slug":     slug,
 			"container_id":       shortID(container.ID),
 			"project":            container.Project,
+			"project_slug":       slugify(container.Project),
 			"cpu_usage_percent":  container.CPUPercent,
 			"memory_usage_bytes": container.MemoryUsageBytes,
 			"memory_limit_bytes": container.MemoryLimitBytes,
@@ -376,15 +387,24 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 	hostStateTopic := fmt.Sprintf("%s/host/state", trimSlashes(p.cfg.TopicPrefix))
 
 	hostPayload := map[string]any{
-		"host":                hostSnapshot.Name,
-		"cpu_usage_percent":   hostSnapshot.CPU.UsagePercent,
-		"cpu_frequency_mhz":   hostSnapshot.CPU.CurrentMHz,
-		"load_1":              hostSnapshot.CPU.Load1,
-		"memory_used_bytes":   hostSnapshot.Memory.UsedBytes,
-		"memory_used_percent": percentage(hostSnapshot.Memory.UsedBytes, hostSnapshot.Memory.TotalBytes),
-		"swap_used_percent":   percentage(hostSnapshot.Memory.SwapUsedBytes, hostSnapshot.Memory.SwapTotalBytes),
-		"uptime_seconds":      hostSnapshot.CPU.UptimeSeconds,
-		"collected_at":        snapshot.CollectedAt.Format(time.RFC3339),
+		"host":                   hostSnapshot.Name,
+		"cpu_usage_percent":      hostSnapshot.CPU.UsagePercent,
+		"cpu_frequency_mhz":      hostSnapshot.CPU.CurrentMHz,
+		"cpu_cores":              cpuCoreAttributes(hostSnapshot.CPU.CoreUsage),
+		"load_1":                 hostSnapshot.CPU.Load1,
+		"memory_used_bytes":      hostSnapshot.Memory.UsedBytes,
+		"memory_total_bytes":     hostSnapshot.Memory.TotalBytes,
+		"memory_free_bytes":      hostSnapshot.Memory.FreeBytes,
+		"memory_available_bytes": hostSnapshot.Memory.AvailableBytes,
+		"memory_cached_bytes":    hostSnapshot.Memory.CachedBytes,
+		"memory_buffers_bytes":   hostSnapshot.Memory.BuffersBytes,
+		"memory_used_percent":    percentage(hostSnapshot.Memory.UsedBytes, hostSnapshot.Memory.TotalBytes),
+		"swap_used_percent":      percentage(hostSnapshot.Memory.SwapUsedBytes, hostSnapshot.Memory.SwapTotalBytes),
+		"swap_used_bytes":        hostSnapshot.Memory.SwapUsedBytes,
+		"swap_total_bytes":       hostSnapshot.Memory.SwapTotalBytes,
+		"swap_free_bytes":        hostSnapshot.Memory.SwapFreeBytes,
+		"uptime_seconds":         hostSnapshot.CPU.UptimeSeconds,
+		"collected_at":           snapshot.CollectedAt.Format(time.RFC3339),
 	}
 	if err := p.publishJSON(hostStateTopic, hostPayload); err != nil {
 		return err
@@ -400,6 +420,40 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 			Model:        "UGOS Exporter Host",
 		}); err != nil {
 			return err
+		}
+	}
+
+	processes := hostSnapshot.Processes
+	if len(processes) > 10 {
+		processes = processes[:10]
+	}
+	for _, process := range processes {
+		slug := slugify(process.Name)
+		stateTopic := fmt.Sprintf("%s/host/processes/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
+		payload := map[string]any{
+			"name":               process.Name,
+			"process_count":      process.ProcessCount,
+			"cpu_usage_percent":  process.CPUPercent,
+			"memory_usage_bytes": process.MemoryBytes,
+			"cpu_time_seconds":   process.CPUTimeSeconds,
+			"collected_at":       snapshot.CollectedAt.Format(time.RFC3339),
+		}
+		if err := p.publishJSON(stateTopic, payload); err != nil {
+			return err
+		}
+
+		for key, def := range processSensors {
+			entityKey := fmt.Sprintf("process:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("sensor", "process_"+slug, def.ObjectID)
+			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, process.Name, def, deviceDescriptor{
+				ID:           fmt.Sprintf("%s_process_%s", hostDeviceID, slug),
+				Name:         fmt.Sprintf("%s Software %s", hostSnapshot.Name, process.Name),
+				ViaDeviceID:  hostDeviceID,
+				Manufacturer: "RCooLeR",
+				Model:        "Host Software",
+			}); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -646,6 +700,8 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 			"size_bytes":             array.SizeBytes,
 			"state":                  array.State,
 			"level":                  array.Level,
+			"members":                array.Members,
+			"mountpoints":            array.Mountpoints,
 			"sync_action":            array.SyncAction,
 			"collected_at":           snapshot.CollectedAt.Format(time.RFC3339),
 		}
@@ -688,11 +744,16 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 			"name":         gpu.Name,
 			"current_mhz":  gpu.CurrentMHz,
 			"max_mhz":      gpu.MaxMHz,
+			"boost_mhz":    gpu.BoostMHz,
 			"driver":       gpu.Driver,
 			"collected_at": snapshot.CollectedAt.Format(time.RFC3339),
 		}
 		if gpu.BusyAvailable {
 			payload["busy_percent"] = gpu.BusyPercent
+		}
+		if gpu.IntelTop != nil {
+			payload["engines"] = gpuEngineAttributes(gpu.IntelTop.Engines)
+			payload["stats"] = gpuStatAttributes(gpu.IntelTop)
 		}
 		if err := p.publishJSON(stateTopic, payload); err != nil {
 			return err
@@ -832,6 +893,7 @@ func (p *MQTTPublisher) ensureSensor(discoveryTopic string, stateTopic string, c
 		"unique_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
 		"object_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
 		"state_topic":           stateTopic,
+		"json_attributes_topic": stateTopic,
 		"value_template":        fmt.Sprintf("{{ value_json.%s }}", def.ValueKey),
 		"availability_topic":    p.availabilityTopic,
 		"payload_available":     "online",
@@ -886,6 +948,7 @@ func (p *MQTTPublisher) ensureBinarySensor(discoveryTopic string, stateTopic str
 		"unique_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
 		"object_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
 		"state_topic":           stateTopic,
+		"json_attributes_topic": stateTopic,
 		"value_template":        def.ValueTemplate,
 		"payload_on":            firstNonEmpty(def.PayloadOn, "ON"),
 		"payload_off":           firstNonEmpty(def.PayloadOff, "OFF"),
@@ -964,6 +1027,90 @@ func percentage(used uint64, total uint64) float64 {
 		return 0
 	}
 	return (float64(used) / float64(total)) * 100
+}
+
+func cpuCoreAttributes(cores []model.CPUCoreSnapshot) []map[string]any {
+	if len(cores) == 0 {
+		return nil
+	}
+
+	attributes := make([]map[string]any, 0, len(cores))
+	for _, core := range cores {
+		attributes = append(attributes, map[string]any{
+			"name":          core.Name,
+			"usage_percent": core.UsagePercent,
+			"current_mhz":   core.CurrentMHz,
+			"min_mhz":       core.MinMHz,
+			"max_mhz":       core.MaxMHz,
+			"governor":      core.Governor,
+		})
+	}
+	return attributes
+}
+
+func gpuEngineAttributes(engines []model.GPUEngineSnapshot) []map[string]any {
+	if len(engines) == 0 {
+		return nil
+	}
+
+	attributes := make([]map[string]any, 0, len(engines))
+	for _, engine := range engines {
+		attributes = append(attributes, map[string]any{
+			"name":         engine.Name,
+			"busy_percent": engine.BusyPercent,
+			"sema_percent": engine.SemaPercent,
+			"wait_percent": engine.WaitPercent,
+		})
+	}
+	return attributes
+}
+
+func gpuStatAttributes(stats *model.IntelGPUSnapshot) []map[string]any {
+	if stats == nil {
+		return nil
+	}
+
+	return []map[string]any{
+		{"key": "frequency_actual_mhz", "label": "Actual Frequency", "value": stats.ActualMHz, "unit": "MHz"},
+		{"key": "frequency_requested_mhz", "label": "Requested Frequency", "value": stats.RequestedMHz, "unit": "MHz"},
+		{"key": "imc_bandwidth_reads_mib_per_second", "label": "IMC Reads", "value": stats.IMCReadsMiBPerSec, "unit": "MiB/s"},
+		{"key": "imc_bandwidth_writes_mib_per_second", "label": "IMC Writes", "value": stats.IMCWritesMiBPerSec, "unit": "MiB/s"},
+		{"key": "interrupts_per_second", "label": "Interrupts", "value": stats.InterruptsPerSec, "unit": "/s"},
+		{"key": "period_milliseconds", "label": "Sample Period", "value": stats.PeriodMilliseconds, "unit": "ms"},
+		{"key": "power_gpu_watts", "label": "GPU Power", "value": stats.GPUPowerWatts, "unit": "W"},
+		{"key": "power_package_watts", "label": "Package Power", "value": stats.PackagePowerWatts, "unit": "W"},
+		{"key": "rc6_percent", "label": "RC6", "value": stats.RC6Percent, "unit": "%"},
+	}
+}
+
+func projectContainerAttributes(containers []model.ContainerSnapshot, projectName string) []map[string]any {
+	projectSlug := slugify(projectName)
+	items := make([]map[string]any, 0)
+	for _, container := range containers {
+		if slugify(container.Project) != projectSlug {
+			continue
+		}
+		items = append(items, containerAttributes(container))
+	}
+	return items
+}
+
+func containerAttributes(container model.ContainerSnapshot) map[string]any {
+	return map[string]any{
+		"name":               container.Name,
+		"container":          container.Name,
+		"container_slug":     slugify(container.Name),
+		"container_id":       shortID(container.ID),
+		"project":            container.Project,
+		"project_slug":       slugify(container.Project),
+		"image":              container.Image,
+		"cpu_usage_percent":  container.CPUPercent,
+		"memory_usage_bytes": container.MemoryUsageBytes,
+		"memory_limit_bytes": container.MemoryLimitBytes,
+		"running":            boolToInt(container.Running),
+		"state":              container.State,
+		"status":             container.Status,
+	}
 }
 
 func displaySourceName(source string) string {

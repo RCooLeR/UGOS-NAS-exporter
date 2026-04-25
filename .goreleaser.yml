@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: ugos-exporter
-    main: .
+    main: ./exporter
     binary: ugos-exporter
     env:
       - CGO_ENABLED=0
@@ -38,7 +38,7 @@ dockers_v2:
   - id: dockerhub
     ids:
       - ugos-exporter
-    dockerfile: Dockerfile.goreleaser
+    dockerfile: exporter/Dockerfile.goreleaser
     images:
       - rcooler/ugos-exporter
     tags:

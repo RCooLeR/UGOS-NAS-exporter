@@ -1,8 +1,8 @@
 services:
   ugos-exporter:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: exporter/Dockerfile
     container_name: ugos-exporter
     restart: unless-stopped
     # Optional for intel_gpu_top on Intel iGPU hosts:

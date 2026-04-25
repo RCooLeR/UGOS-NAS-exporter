@@ -7,6 +7,10 @@ RUN apk upgrade --no-cache && apk add --no-cache git ca-certificates
 # Set working directory inside the container
 WORKDIR /app
 
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+
 # Copy Go source code into the container
 COPY . .
 
@@ -16,12 +20,18 @@ ENV GO111MODULE=on
 # Download deps
 RUN go mod download
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /ugos-exporter .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+    -o /ugos-exporter ./exporter
 
 FROM debian:bookworm-slim
 
+ARG TARGETARCH
+
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates intel-gpu-tools \
+    && packages="ca-certificates" \
+    && if [ "$TARGETARCH" = "amd64" ]; then packages="$packages intel-gpu-tools"; fi \
+    && apt-get install --no-install-recommends -y $packages \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

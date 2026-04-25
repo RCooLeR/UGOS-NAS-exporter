@@ -1,8 +1,12 @@
 import { THEME_COLORS } from './theme';
 import type {
   CardConfig,
+  CpuCoreDetail,
+  DockerContainer,
   DockerProject,
   DriveInfo,
+  GpuEngineDetail,
+  GpuStatDetail,
   HassEntityLike,
   HardwareMetricCard,
   HardwareSummaryCard,
@@ -10,6 +14,8 @@ import type {
   HomeAssistantLike,
   NasDashboardModel,
   NetworkInterfaceInfo,
+  ProcessDetail,
+  RamBreakdownItem,
   StoragePool,
   TrafficPoint
 } from './types';
@@ -19,6 +25,10 @@ const STORAGE_POOL_ACCENTS = [THEME_COLORS.green, THEME_COLORS.cyan, THEME_COLOR
 const hostCpuRegex = /^sensor\.ugos_exporter_host_(.+?)_cpu_usage_percent$/;
 const projectCpuRegex = /^sensor\.ugos_exporter_project_(.+?)_cpu_usage_percent$/;
 const legacyHostCpuRegex = /^sensor\.([a-z0-9_]+)_\1_cpu(?:_|$)/;
+const containerEntityRegex =
+  /^(?:sensor|binary_sensor)\.ugos_exporter_container_(.+?)_(cpu_usage_percent|memory_usage_bytes|running)$/;
+const processEntityRegex =
+  /^sensor\.ugos_exporter_process_(.+?)_(process_count|cpu_usage_percent|memory_usage_bytes|cpu_time_seconds)$/;
 
 interface MetricHistorySample {
   key: string;
@@ -59,6 +69,7 @@ interface ArraySnapshot {
   totalDisks?: number;
   syncPercent?: number;
   level?: string;
+  members: string[];
 }
 
 interface TemperatureSnapshot {
@@ -211,34 +222,58 @@ export const buildLiveDashboardModel = (
 
   const hostPrefix = `ugos_exporter_host_${hostSlug}`;
   const hostCpuEntityId = resolveHostMetricEntityId(states, hostSlug, 'cpu');
+  const hostMemoryEntityId = resolveHostMetricEntityId(states, hostSlug, 'memoryUsedBytes');
   const cpuPercent = getNumberState(states, hostCpuEntityId) ?? 0;
   const load1 = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'load1')) ?? 0;
   const cpuFrequencyMHz = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'cpufreq'));
   const uptimeSeconds = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'uptime')) ?? 0;
-  const memoryUsedBytes = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'memoryUsedBytes')) ?? 0;
+  const memoryUsedBytes = getNumberState(states, hostMemoryEntityId) ?? 0;
   const memoryUsedPercent = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'memoryUsedPercent')) ?? 0;
   const swapUsedPercent = getNumberState(states, resolveHostMetricEntityId(states, hostSlug, 'swapUsedPercent')) ?? 0;
   const memoryTotalBytes = resolveMemoryTotalBytes(memoryUsedBytes, memoryUsedPercent, config?.memoryTotalBytes);
   const hostName = resolveHostDisplayName(states, hostSlug, config?.host);
+  const cpuCores = buildCpuCoreDetails(states, hostCpuEntityId);
+  const ramBreakdown = buildRamBreakdown(states, hostMemoryEntityId, memoryTotalBytes, memoryUsedBytes);
+  const topProcesses = buildTopProcesses(states);
 
   const temperatures = collectTemperatureSnapshots(states, hostSlug);
   const cpuTemperature = pickTemperature(temperatures, ['cpu', 'package', 'soc', 'core', 'tctl']);
 
   const gpuSlugs = collectGpuSlugs(states, hostSlug, hostPrefix);
   const primaryGpuSlug = gpuSlugs[0];
+  const primaryGpuBusyEntityId =
+    primaryGpuSlug !== undefined
+      ? resolveGpuMetricEntityId(states, hostSlug, hostPrefix, primaryGpuSlug, 'busy')
+      : undefined;
+  const primaryGpuCurrentEntityId =
+    primaryGpuSlug !== undefined
+      ? resolveGpuMetricEntityId(states, hostSlug, hostPrefix, primaryGpuSlug, 'current')
+      : undefined;
+  const primaryGpuMaxEntityId =
+    primaryGpuSlug !== undefined
+      ? resolveGpuMetricEntityId(states, hostSlug, hostPrefix, primaryGpuSlug, 'max')
+      : undefined;
   const gpuBusyPercent =
     primaryGpuSlug !== undefined
       ? resolveGpuBusyPercent(states, hostSlug, hostPrefix, primaryGpuSlug)
       : undefined;
   const gpuCurrentMHz =
     primaryGpuSlug !== undefined
-      ? getNumberState(states, resolveGpuMetricEntityId(states, hostSlug, hostPrefix, primaryGpuSlug, 'current'))
+      ? getNumberState(states, primaryGpuCurrentEntityId)
       : undefined;
   const gpuMaxMHz =
     primaryGpuSlug !== undefined
-      ? getNumberState(states, resolveGpuMetricEntityId(states, hostSlug, hostPrefix, primaryGpuSlug, 'max'))
+      ? getNumberState(states, primaryGpuMaxEntityId)
       : undefined;
   const gpuTemperature = pickTemperature(temperatures, ['gpu', 'graphics', 'igpu', 'intel']);
+  const gpuEngines = buildGpuEngineDetails(
+    states,
+    primaryGpuBusyEntityId ?? primaryGpuCurrentEntityId ?? primaryGpuMaxEntityId
+  );
+  const gpuStats = buildGpuStatDetails(
+    states,
+    primaryGpuBusyEntityId ?? primaryGpuCurrentEntityId ?? primaryGpuMaxEntityId
+  );
 
   const filesystems = collectFilesystems(states, hostSlug);
   const storageFilesystems = selectFilesystems(filesystems, config?.storageFilesystems);
@@ -411,7 +446,12 @@ export const buildLiveDashboardModel = (
       },
       networkInterfaces,
       networkTrafficHistory,
-      networkTrafficLines
+      networkTrafficLines,
+      cpuCores,
+      ramBreakdown,
+      gpuEngines,
+      gpuStats,
+      topProcesses
     }
   };
 };
@@ -548,6 +588,7 @@ const buildDrive = (
 const buildStoragePools = (arrays: ArraySnapshot[], filesystems: FilesystemSnapshot[], drives: DriveInfo[]): StoragePool[] => {
   if (arrays.length === 0) {
     return filesystems.map((filesystem, index) => ({
+      key: filesystem.slug,
       name: filesystemToLabel(filesystemNameFromSlug(filesystem.slug)),
       layout: filesystem.readOnly ? 'Filesystem | Read-only' : 'Filesystem',
       status: filesystem.readOnly ? 'warning' : 'healthy',
@@ -566,25 +607,39 @@ const buildStoragePools = (arrays: ArraySnapshot[], filesystems: FilesystemSnaps
     const mediaLabel = inferArrayMediaLabel(array, drives);
     const volumeLabel = matchedFilesystem ? filesystemToLabel(filesystemNameFromSlug(matchedFilesystem.slug)) : undefined;
     const arrayLevel = normalizeArrayLevel(array.level);
+    const mappedDriveSlugs = mapArrayMembersToDriveSlugs(array.members, drives);
+    const fallbackDriveSlugs =
+      mappedDriveSlugs.length === 0 && arrays.length === 1
+        ? drives.map((drive) => drive.diskSlug).filter((slug): slug is string => Boolean(slug))
+        : mappedDriveSlugs;
 
     return {
+      key: array.slug,
       name: mediaLabel ?? volumeLabel ?? array.name,
       layout: [arrayLevel, volumeLabel].filter(Boolean).join(' | ') || `${array.slug.toUpperCase()} Array`,
       driveCountText: formatArrayDriveCounts(array.activeDisks, array.totalDisks),
       status: array.degradedDisks > 0 ? 'degraded' : matchedFilesystem?.readOnly ? 'warning' : 'healthy',
       usedBytes: matchedFilesystem?.usedBytes ?? 0,
       totalBytes: matchedFilesystem?.totalBytes ?? array.sizeBytes,
-      accent: STORAGE_POOL_ACCENTS[index % STORAGE_POOL_ACCENTS.length]
+      accent: STORAGE_POOL_ACCENTS[index % STORAGE_POOL_ACCENTS.length],
+      driveSlugs: fallbackDriveSlugs
     };
   });
 };
 
 const buildProject = (states: Record<string, HassEntityLike>, projectSlug: string): DockerProject | null => {
+  const projectEntityId = resolveProjectPayloadEntityId(states, projectSlug);
   const cpuEntityId = resolveProjectMetricEntityId(states, projectSlug, 'cpu');
-  const cpuPercent = getNumberState(states, cpuEntityId);
-  const memoryBytes = getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'memory'));
-  const totalContainers = getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'total'));
-  const runningContainers = getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'running'));
+  const projectEntity = states[projectEntityId ?? ''];
+  const cpuPercent = getNumberAttribute(projectEntity, 'cpu_usage_percent') ?? getNumberState(states, cpuEntityId);
+  const memoryBytes =
+    getNumberAttribute(projectEntity, 'memory_usage_bytes') ??
+    getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'memory'));
+  const totalContainers =
+    getNumberAttribute(projectEntity, 'total_containers') ?? getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'total'));
+  const runningContainers =
+    getNumberAttribute(projectEntity, 'running_containers') ??
+    getNumberState(states, resolveProjectMetricEntityId(states, projectSlug, 'running'));
   if (cpuPercent === undefined || memoryBytes === undefined || totalContainers === undefined || runningContainers === undefined) {
     return null;
   }
@@ -592,7 +647,9 @@ const buildProject = (states: Record<string, HassEntityLike>, projectSlug: strin
   return {
     key: projectSlug,
     title: normalizeProjectTitle(
-      cleanupFriendlyName(states[cpuEntityId ?? ''], 'CPU', '') ??
+      getStringAttribute(projectEntity, 'project') ??
+        cleanupFriendlyName(projectEntity, 'CPU', '') ??
+        cleanupFriendlyName(states[cpuEntityId ?? ''], 'CPU', '') ??
         projectSlug
           .split('_')
           .filter(Boolean)
@@ -603,8 +660,305 @@ const buildProject = (states: Record<string, HassEntityLike>, projectSlug: strin
     memoryBytes,
     runningContainers: Math.round(runningContainers),
     totalContainers: Math.round(totalContainers),
-    status: runningContainers <= 0 ? 'down' : runningContainers < totalContainers ? 'partial' : 'up'
+    status: runningContainers <= 0 ? 'down' : runningContainers < totalContainers ? 'partial' : 'up',
+    containers: collectProjectContainers(states, projectSlug, projectEntityId ?? cpuEntityId)
   };
+};
+
+const collectProjectContainers = (
+  states: Record<string, HassEntityLike>,
+  projectSlug: string,
+  projectEntityId?: string
+): DockerContainer[] => {
+  const projectContainers = getObjectArrayAttribute(states[projectEntityId ?? ''], 'containers');
+  if (projectContainers.length > 0) {
+    return projectContainers
+      .map((item, index) => parseProjectContainerAttribute(item, projectSlug, index))
+      .filter((container): container is DockerContainer => container !== null)
+      .sort(
+        (left, right) =>
+          Number(right.running) - Number(left.running) ||
+          right.cpuPercent - left.cpuPercent ||
+          right.memoryBytes - left.memoryBytes ||
+          left.name.localeCompare(right.name)
+      );
+  }
+
+  const containersByKey = new Map<
+    string,
+    Partial<DockerContainer> & {
+      key: string;
+      projectSlug?: string;
+    }
+  >();
+
+  for (const [entityId, entity] of getStateEntries(states)) {
+    const containerName = getStringAttribute(entity, 'container');
+    const containerProject = normalizeProjectSlug(getStringAttribute(entity, 'project'));
+    const image = getStringAttribute(entity, 'image');
+    const status = getStringAttribute(entity, 'status');
+    const state = getStringAttribute(entity, 'state');
+    const running = getBooleanAttribute(entity, 'running');
+    const hasContainerPayload =
+      Boolean(containerName) ||
+      image !== undefined ||
+      status !== undefined ||
+      state !== undefined ||
+      running !== undefined ||
+      getNumberAttribute(entity, 'memory_limit_bytes') !== undefined ||
+      containerEntityRegex.test(entityId);
+    if (!hasContainerPayload) {
+      continue;
+    }
+
+    const containerKey = slugify(containerName ?? getStringAttribute(entity, 'container_id') ?? entityId);
+    const container = containersByKey.get(containerKey) ?? { key: containerKey };
+
+    container.projectSlug =
+      container.projectSlug ??
+      containerProject ??
+      inferProjectSlugFromEntity(containerKey, entity, projectSlug);
+    container.name =
+      container.name ??
+      containerName ??
+      cleanupFriendlyName(entity, '', '') ??
+      toDisplayName(containerKey);
+    container.image = container.image ?? image ?? 'Unknown';
+    container.status = container.status ?? status ?? 'Unavailable';
+    container.state = container.state ?? state ?? inferContainerState(entity);
+    container.memoryLimitBytes = container.memoryLimitBytes ?? getNumberAttribute(entity, 'memory_limit_bytes');
+    container.cpuPercent = getNumberAttribute(entity, 'cpu_usage_percent') ?? container.cpuPercent ?? 0;
+    container.memoryBytes = getNumberAttribute(entity, 'memory_usage_bytes') ?? container.memoryBytes ?? 0;
+    container.running = running ?? inferContainerRunning(entity, container.state) ?? container.running;
+
+    containersByKey.set(containerKey, container);
+  }
+
+  return Array.from(containersByKey.values())
+    .filter((container) => container.projectSlug === projectSlug || matchesProjectContainerState(container, projectSlug))
+    .map((container) => ({
+      key: container.key,
+      name: container.name ?? toDisplayName(container.key),
+      image: container.image ?? 'Unknown',
+      status: container.status ?? 'Unavailable',
+      state: container.state ?? 'unknown',
+      running: container.running ?? false,
+      cpuPercent: container.cpuPercent ?? 0,
+      memoryBytes: container.memoryBytes ?? 0,
+      memoryLimitBytes: container.memoryLimitBytes
+    }))
+    .sort(
+      (left, right) =>
+        Number(right.running) - Number(left.running) ||
+        right.cpuPercent - left.cpuPercent ||
+        right.memoryBytes - left.memoryBytes ||
+        left.name.localeCompare(right.name)
+    );
+};
+
+const parseProjectContainerAttribute = (
+  item: Record<string, unknown>,
+  projectSlug: string,
+  index: number
+): DockerContainer | null => {
+  const containerProject = normalizeProjectSlug(readString(item, ['project_slug', 'project', 'ProjectSlug', 'Project']));
+  if (containerProject !== undefined && containerProject !== projectSlug) {
+    return null;
+  }
+
+  const name = readString(item, ['name', 'container', 'Name', 'Container']);
+  const key =
+    readString(item, ['container_slug', 'key', 'ContainerSlug', 'Key']) ??
+    slugify(name ?? readString(item, ['container_id', 'ContainerID']) ?? `container_${index}`);
+
+  return {
+    key,
+    name: name ?? toDisplayName(key),
+    image: readString(item, ['image', 'Image']) ?? 'Unknown',
+    status: readString(item, ['status', 'Status']) ?? 'Unavailable',
+    state: readString(item, ['state', 'State']) ?? 'unknown',
+    running:
+      readBooleanRecord(item, ['running', 'Running']) ??
+      readString(item, ['state', 'State'])?.toLowerCase() === 'running',
+    cpuPercent: readNumber(item, ['cpu_usage_percent', 'cpuPercent', 'CPUUsagePercent', 'CPUPercent']) ?? 0,
+    memoryBytes: readNumber(item, ['memory_usage_bytes', 'memoryBytes', 'MemoryUsageBytes', 'MemoryBytes']) ?? 0,
+    memoryLimitBytes: readNumber(item, ['memory_limit_bytes', 'memoryLimitBytes', 'MemoryLimitBytes'])
+  };
+};
+
+const buildCpuCoreDetails = (
+  states: Record<string, HassEntityLike>,
+  hostCpuEntityId: string | undefined
+): CpuCoreDetail[] => {
+  const items: CpuCoreDetail[] = [];
+
+  getObjectArrayAttribute(states[hostCpuEntityId ?? ''], 'cpu_cores').forEach((item, index) => {
+      const name = readString(item, ['name']) ?? `cpu${index}`;
+      const usagePercent = readNumber(item, ['usage_percent', 'UsagePercent']);
+      if (usagePercent === undefined) {
+        return;
+      }
+
+      items.push({
+        key: slugify(name) || `cpu_${index}`,
+        name: normalizeCpuCoreLabel(name),
+        usagePercent,
+        currentMHz: readNumber(item, ['current_mhz', 'CurrentMHz']),
+        minMHz: readNumber(item, ['min_mhz', 'MinMHz']),
+        maxMHz: readNumber(item, ['max_mhz', 'MaxMHz']),
+        governor: readString(item, ['governor', 'Governor'])
+      });
+    });
+
+  return items.sort(compareCpuCoreDetails);
+};
+
+const buildRamBreakdown = (
+  states: Record<string, HassEntityLike>,
+  hostMemoryEntityId: string | undefined,
+  resolvedMemoryTotalBytes: number,
+  resolvedMemoryUsedBytes: number
+): RamBreakdownItem[] => {
+  const memoryEntity = states[hostMemoryEntityId ?? ''];
+  const totalBytes = getNumberAttribute(memoryEntity, 'memory_total_bytes') ?? resolvedMemoryTotalBytes;
+  const usedBytes = getNumberAttribute(memoryEntity, 'memory_used_bytes') ?? resolvedMemoryUsedBytes;
+  const buffersBytes = getNumberAttribute(memoryEntity, 'memory_buffers_bytes');
+  const cachedBytes = getNumberAttribute(memoryEntity, 'memory_cached_bytes');
+  const swapUsedBytes = getNumberAttribute(memoryEntity, 'swap_used_bytes');
+  const swapTotalBytes = getNumberAttribute(memoryEntity, 'swap_total_bytes');
+
+  return [
+    { key: 'total', label: 'Total', valueBytes: totalBytes },
+    { key: 'used', label: 'Used', valueBytes: usedBytes, totalBytes },
+    ...(buffersBytes !== undefined ? [{ key: 'buffers', label: 'Buffers', valueBytes: buffersBytes, totalBytes }] : []),
+    ...(cachedBytes !== undefined ? [{ key: 'cached', label: 'Cached', valueBytes: cachedBytes, totalBytes }] : []),
+    ...(swapUsedBytes !== undefined ? [{ key: 'swap_used', label: 'Swap Used', valueBytes: swapUsedBytes, totalBytes: swapTotalBytes }] : []),
+    ...(swapTotalBytes !== undefined ? [{ key: 'swap_total', label: 'Swap Total', valueBytes: swapTotalBytes }] : [])
+  ];
+};
+
+const buildGpuEngineDetails = (
+  states: Record<string, HassEntityLike>,
+  gpuEntityId: string | undefined
+): GpuEngineDetail[] => {
+  const items: GpuEngineDetail[] = [];
+
+  getObjectArrayAttribute(states[gpuEntityId ?? ''], 'engines').forEach((item, index) => {
+      const name = readString(item, ['name', 'Name']);
+      const busyPercent = readNumber(item, ['busy_percent', 'BusyPercent']);
+      if (!name || busyPercent === undefined) {
+        return;
+      }
+
+      items.push({
+        key: slugify(name) || `engine_${index}`,
+        label: normalizeGpuEngineLabel(name),
+        busyPercent,
+        semaPercent: readNumber(item, ['sema_percent', 'SemaPercent']),
+        waitPercent: readNumber(item, ['wait_percent', 'WaitPercent'])
+      });
+    });
+
+  return items.sort((left, right) => right.busyPercent - left.busyPercent || left.label.localeCompare(right.label));
+};
+
+const buildGpuStatDetails = (
+  states: Record<string, HassEntityLike>,
+  gpuEntityId: string | undefined
+): GpuStatDetail[] => {
+  const items: GpuStatDetail[] = [];
+
+  getObjectArrayAttribute(states[gpuEntityId ?? ''], 'stats').forEach((item, index) => {
+    const value = readNumber(item, ['value', 'Value']);
+    if (value === undefined) {
+      return;
+    }
+
+    const key = readString(item, ['key', 'Key']) ?? `stat_${index}`;
+    items.push({
+      key,
+      label: readString(item, ['label', 'Label']) ?? normalizeGpuStatLabel(key),
+      value,
+      unit: readString(item, ['unit', 'Unit'])
+    });
+  });
+
+  return items;
+};
+
+const buildTopProcesses = (states: Record<string, HassEntityLike>): ProcessDetail[] => {
+  const processes = new Map<string, ProcessDetail>();
+
+  for (const [entityId, entity] of getStateEntries(states)) {
+    const processName = getStringAttribute(entity, 'name');
+    const processCount = getNumberAttribute(entity, 'process_count');
+    const cpuTimeSeconds = getNumberAttribute(entity, 'cpu_time_seconds');
+    const cpuPercent = getNumberAttribute(entity, 'cpu_usage_percent');
+    const memoryBytes = getNumberAttribute(entity, 'memory_usage_bytes');
+    const looksLikeProcessEntity =
+      processCount !== undefined ||
+      cpuTimeSeconds !== undefined ||
+      (processName !== undefined &&
+        getFriendlyNameLower(entity).includes('process') &&
+        cpuPercent !== undefined &&
+        memoryBytes !== undefined) ||
+      processEntityRegex.test(entityId);
+    if (!looksLikeProcessEntity) {
+      continue;
+    }
+
+    const processKey = slugify(processName ?? entityId);
+    const current = processes.get(processKey) ?? {
+      key: processKey,
+      name: processName ?? cleanupFriendlyName(entity, '', '') ?? toDisplayName(processKey),
+      processCount: 0,
+      cpuPercent: 0,
+      memoryBytes: 0
+    };
+
+    current.name = processName ?? current.name;
+    current.processCount = Math.round(processCount ?? current.processCount);
+    current.cpuPercent = cpuPercent ?? current.cpuPercent;
+    current.memoryBytes = memoryBytes ?? current.memoryBytes;
+    current.cpuTimeSeconds = cpuTimeSeconds ?? current.cpuTimeSeconds;
+
+    processes.set(processKey, current);
+  }
+
+  return Array.from(processes.values())
+    .sort(
+      (left, right) =>
+        right.cpuPercent - left.cpuPercent ||
+        right.memoryBytes - left.memoryBytes ||
+        right.processCount - left.processCount ||
+        left.name.localeCompare(right.name)
+    )
+    .slice(0, 10);
+};
+
+const mapArrayMembersToDriveSlugs = (members: string[], drives: DriveInfo[]): string[] => {
+  if (members.length === 0) {
+    return [];
+  }
+
+  const driveAliases = new Map<string, string>();
+  drives
+    .map((drive) => drive.diskSlug)
+    .filter((slug): slug is string => Boolean(slug))
+    .forEach((driveSlug) => {
+      for (const alias of normalizeBlockDeviceCandidates(driveSlug)) {
+        driveAliases.set(alias, driveSlug);
+      }
+    });
+
+  return Array.from(
+    new Set(
+      members
+        .flatMap((member) => normalizeBlockDeviceCandidates(member))
+        .map((memberSlug) => driveAliases.get(memberSlug))
+        .filter((driveSlug): driveSlug is string => Boolean(driveSlug))
+    )
+  );
 };
 
 const buildNetworkInterface = (
@@ -699,7 +1053,18 @@ const collectArrays = (states: Record<string, HassEntityLike>, hostSlug: string)
     const activeDisks = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'active'));
     const totalDisks = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'total'));
     const syncPercent = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'sync'));
-    const level = getTextState(states, resolveArrayTextMetricEntityId(states, hostSlug, arraySlug, 'level'));
+    const levelEntityId = resolveArrayTextMetricEntityId(states, hostSlug, arraySlug, 'level');
+    const level = getTextState(states, levelEntityId);
+    const members = getFirstStringArrayAttribute(
+      [
+        states[sizeEntityId ?? ''],
+        states[levelEntityId ?? ''],
+        states[resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'active') ?? ''],
+        states[resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'total') ?? ''],
+        states[resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'degraded') ?? '']
+      ],
+      'members'
+    );
 
     arrays.push({
       slug: arraySlug,
@@ -709,7 +1074,8 @@ const collectArrays = (states: Record<string, HassEntityLike>, hostSlug: string)
       activeDisks: activeDisks !== undefined ? Math.round(activeDisks) : undefined,
       totalDisks: totalDisks !== undefined ? Math.round(totalDisks) : undefined,
       syncPercent,
-      level
+      level,
+      members
     });
   }
 
@@ -843,7 +1209,18 @@ const collectProjectSlugs = (states: Record<string, HassEntityLike>): string[] =
       .map(([, entity]) => getFriendlyProjectSlug(entity))
       .filter((slug): slug is string => Boolean(slug));
 
-    return Array.from(new Set([...exactSlugs, ...legacySlugs])).sort();
+    const attributeSlugs = getStateEntries(states)
+      .filter(
+        ([entityId, entity]) =>
+          entityId.startsWith('sensor.') &&
+          (getNumberAttribute(entity, 'total_containers') !== undefined ||
+            getNumberAttribute(entity, 'running_containers') !== undefined ||
+            getObjectArrayAttribute(entity, 'containers').length > 0)
+      )
+      .map(([, entity]) => normalizeProjectSlug(getStringAttribute(entity, 'project_slug') ?? getStringAttribute(entity, 'project')))
+      .filter((slug): slug is string => Boolean(slug));
+
+    return Array.from(new Set([...exactSlugs, ...legacySlugs, ...attributeSlugs])).sort();
   });
 };
 
@@ -1433,6 +1810,57 @@ const resolveProjectMetricEntityId = (
   });
 };
 
+const resolveProjectPayloadEntityId = (states: Record<string, HassEntityLike>, projectSlug: string): string | undefined => {
+  return resolveCachedEntityId(states, `projectPayload:${projectSlug}`, () => {
+    let bestEntityId: string | undefined;
+    let bestScore = -1;
+
+    for (const [entityId, entity] of getStateEntries(states)) {
+      if (!entityId.startsWith('sensor.')) {
+        continue;
+      }
+
+      const entityProjectSlug = normalizeProjectSlug(getStringAttribute(entity, 'project_slug') ?? getStringAttribute(entity, 'project'));
+      if (entityProjectSlug !== projectSlug) {
+        continue;
+      }
+
+      let score = 0;
+      if (getObjectArrayAttribute(entity, 'containers').length > 0) {
+        score += 8;
+      }
+      if (getNumberAttribute(entity, 'total_containers') !== undefined) {
+        score += 4;
+      }
+      if (getNumberAttribute(entity, 'running_containers') !== undefined) {
+        score += 3;
+      }
+      if (getNumberAttribute(entity, 'memory_usage_bytes') !== undefined) {
+        score += 2;
+      }
+      if (getNumberAttribute(entity, 'cpu_usage_percent') !== undefined) {
+        score += 2;
+      }
+      if (entityId.startsWith('sensor.compose_project_')) {
+        score += 3;
+      }
+      if (entityId.startsWith('sensor.ugos_exporter_project_')) {
+        score += 3;
+      }
+
+      if (score > bestScore || (score === bestScore && bestEntityId !== undefined && entityId.localeCompare(bestEntityId) < 0)) {
+        bestEntityId = entityId;
+        bestScore = score;
+      } else if (bestEntityId === undefined) {
+        bestEntityId = entityId;
+        bestScore = score;
+      }
+    }
+
+    return bestEntityId;
+  });
+};
+
 const matchesSelector = (slug: string, name: string, selectors: string[]): boolean => {
   const normalizedSlug = slugify(slug);
   const normalizedName = slugify(name);
@@ -1540,7 +1968,10 @@ const buildWatchPrefixes = (hostSlug: string): string[] => [
   `sensor.${hostSlug}_`,
   `binary_sensor.${hostSlug}_`,
   'sensor.ugos_exporter_project_',
-  'sensor.compose_project_'
+  'sensor.compose_project_',
+  'sensor.ugos_exporter_container_',
+  'binary_sensor.ugos_exporter_container_',
+  'sensor.ugos_exporter_process_'
 ];
 
 const collectWatchedEntityIds = (
@@ -1549,7 +1980,22 @@ const collectWatchedEntityIds = (
   ipEntity: string | undefined
 ): string[] =>
   getStateKeys(states)
-    .filter((entityId) => (ipEntity !== undefined && entityId === ipEntity) || watchPrefixes.some((prefix) => entityId.startsWith(prefix)))
+    .filter((entityId) => {
+      if (ipEntity !== undefined && entityId === ipEntity) {
+        return true;
+      }
+      if (watchPrefixes.some((prefix) => entityId.startsWith(prefix))) {
+        return true;
+      }
+
+      const entity = states[entityId];
+      return (
+        getStringAttribute(entity, 'container') !== undefined ||
+        getStringAttribute(entity, 'project') !== undefined ||
+        getNumberAttribute(entity, 'process_count') !== undefined ||
+        getNumberAttribute(entity, 'cpu_time_seconds') !== undefined
+      );
+    })
     .sort();
 
 const isHostRootSensorEntity = (entityId: string, hostSlug: string): boolean =>
@@ -1638,6 +2084,116 @@ const getTextState = (states: Record<string, HassEntityLike>, entityId: string |
   const value = entity.state;
   cache.textState = !value || value === 'unknown' || value === 'unavailable' ? null : value;
   return cache.textState ?? undefined;
+};
+
+const getStringAttribute = (entity: HassEntityLike | undefined, key: string): string | undefined => {
+  const value = entity?.attributes[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+};
+
+const getNumberAttribute = (entity: HassEntityLike | undefined, key: string): number | undefined => {
+  const value = entity?.attributes[key];
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return parseNumber(value);
+  }
+  return undefined;
+};
+
+const getBooleanAttribute = (entity: HassEntityLike | undefined, key: string): boolean | undefined => {
+  const value = entity?.attributes[key];
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'running') {
+      return true;
+    }
+    if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'stopped') {
+      return false;
+    }
+  }
+  return undefined;
+};
+
+const getStringArrayAttribute = (entity: HassEntityLike | undefined, key: string): string[] => {
+  const value = entity?.attributes[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+};
+
+const getFirstStringArrayAttribute = (entities: Array<HassEntityLike | undefined>, key: string): string[] => {
+  for (const entity of entities) {
+    const values = getStringArrayAttribute(entity, key);
+    if (values.length > 0) {
+      return values;
+    }
+  }
+  return [];
+};
+
+const getObjectArrayAttribute = (entity: HassEntityLike | undefined, key: string): Array<Record<string, unknown>> => {
+  const value = entity?.attributes[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null);
+};
+
+const readString = (record: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const readBooleanRecord = (record: Record<string, unknown>, keys: string[]): boolean | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      return value !== 0;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'running') {
+        return true;
+      }
+      if (normalized === '0' || normalized === 'false' || normalized === 'off' || normalized === 'stopped') {
+        return false;
+      }
+    }
+  }
+  return undefined;
+};
+
+const readNumber = (record: Record<string, unknown>, keys: string[]): number | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = parseNumber(value);
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
 };
 
 const parseNumber = (value: string | undefined): number | undefined => {
@@ -1821,10 +2377,19 @@ const getFriendlyProjectSlug = (entity: HassEntityLike | undefined): string | un
   }
 
   const cleanedName = friendlyName
+    .replace(/^(compose|docker)\s+project\s+/i, '')
     .replace(/\s+(CPU|Memory|Total Containers|Running Containers)$/i, '')
     .trim();
+  if (!cleanedName) {
+    return undefined;
+  }
 
-  return cleanedName ? slugify(cleanedName) : undefined;
+  const dedupedName = cleanedName
+    .split(/\s+/)
+    .filter((word, index, words) => index === 0 || word.toLowerCase() !== words[index - 1]?.toLowerCase())
+    .join(' ');
+
+  return dedupedName ? slugify(dedupedName) : undefined;
 };
 
 const normalizeProjectTitle = (value: string): string => {
@@ -1913,6 +2478,212 @@ const getFriendlyName = (entity: HassEntityLike | undefined): string => getEntit
 
 const getFriendlyNameLower = (entity: HassEntityLike | undefined): string =>
   getEntityDerivedCache(entity)?.friendlyNameLower ?? '';
+
+const normalizeCpuCoreLabel = (value: string): string => {
+  const match = value.match(/^cpu\s*(\d+)$/i);
+  if (match) {
+    return `Core ${match[1]}`;
+  }
+  return value.replace(/\s+/g, ' ').trim();
+};
+
+const compareCpuCoreDetails = (left: CpuCoreDetail, right: CpuCoreDetail): number => {
+  const leftIndex = parseNumber(left.key.replace(/[^\d]/g, '')) ?? Number.MAX_SAFE_INTEGER;
+  const rightIndex = parseNumber(right.key.replace(/[^\d]/g, '')) ?? Number.MAX_SAFE_INTEGER;
+  return leftIndex - rightIndex || left.name.localeCompare(right.name);
+};
+
+const normalizeGpuEngineLabel = (value: string): string => {
+  const normalized = value.replace(/\/\d+$/g, '').replace(/\/3d/gi, '').replace(/\s+/g, '');
+  if (/^render/i.test(normalized)) {
+    return 'Render';
+  }
+  if (/^blitter/i.test(normalized)) {
+    return 'Blitter';
+  }
+  if (/^videoenhance/i.test(normalized)) {
+    return 'VideoEnhance';
+  }
+  if (/^video/i.test(normalized)) {
+    return 'Video';
+  }
+  return value.replace(/\/\d+$/g, '').trim();
+};
+
+const normalizeGpuStatLabel = (value: string): string =>
+  value
+    .split('_')
+    .filter(Boolean)
+    .map((token) => {
+      if (token === 'imc') {
+        return 'IMC';
+      }
+      if (token === 'rc6') {
+        return 'RC6';
+      }
+      if (token === 'mhz') {
+        return 'MHz';
+      }
+      if (token === 'mib') {
+        return 'MiB';
+      }
+      return capitalize(token);
+    })
+    .join(' ');
+
+const normalizeProjectSlug = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = slugify(value);
+  return normalized === 'unknown' ? undefined : normalized;
+};
+
+const metricSuffixLabel = (metric: string): string => {
+  switch (metric) {
+    case 'cpu_usage_percent':
+      return 'CPU';
+    case 'memory_usage_bytes':
+      return 'Memory';
+    case 'running':
+      return 'Running';
+    default:
+      return '';
+  }
+};
+
+const inferContainerState = (entity: HassEntityLike | undefined): string => {
+  const state = String(entity?.state ?? '').trim().toLowerCase();
+  if (!state) {
+    return 'unknown';
+  }
+  if (state === '1' || state === 'on') {
+    return 'running';
+  }
+  if (state === '0' || state === 'off') {
+    return 'stopped';
+  }
+  return state;
+};
+
+const inferContainerRunning = (entity: HassEntityLike | undefined, fallbackState?: string): boolean | undefined => {
+  const running = getBooleanAttribute(entity, 'running');
+  if (running !== undefined) {
+    return running;
+  }
+
+  const normalizedState = String(entity?.state ?? fallbackState ?? '').trim().toLowerCase();
+  if (normalizedState === '1' || normalizedState === 'on' || normalizedState === 'running') {
+    return true;
+  }
+  if (normalizedState === '0' || normalizedState === 'off' || normalizedState === 'stopped' || normalizedState === 'exited') {
+    return false;
+  }
+  return undefined;
+};
+
+const inferProjectSlugFromEntity = (
+  containerKey: string,
+  entity: HassEntityLike | undefined,
+  projectSlug: string
+): string | undefined => {
+  const explicitProject = normalizeProjectSlug(getStringAttribute(entity, 'project'));
+  if (explicitProject) {
+    return explicitProject;
+  }
+
+  const candidates = [containerKey, getStringAttribute(entity, 'container') ?? '', getStringAttribute(entity, 'image') ?? ''];
+  return candidates.some((candidate) => matchesProjectContainerHeuristics(candidate, projectSlug)) ? projectSlug : undefined;
+};
+
+const matchesProjectContainerState = (
+  container: Partial<DockerContainer> & { key: string },
+  projectSlug: string
+): boolean => [container.key, container.name ?? '', container.image ?? ''].some((value) => matchesProjectContainerHeuristics(value, projectSlug));
+
+const matchesProjectContainerHeuristics = (value: string, projectSlug: string): boolean => {
+  const candidate = value.trim().toLowerCase();
+  if (!candidate) {
+    return false;
+  }
+
+  const normalizedProject = projectSlug.trim().toLowerCase();
+  const compactProject = normalizedProject.replace(/[^a-z0-9]+/g, '');
+  const compactCandidate = candidate.replace(/[^a-z0-9]+/g, '');
+  if (candidate === normalizedProject || compactCandidate === compactProject) {
+    return true;
+  }
+
+  const variants = Array.from(
+    new Set([
+      normalizedProject,
+      normalizedProject.replace(/-/g, '_'),
+      normalizedProject.replace(/_/g, '-'),
+      ...normalizedProject.split(/[_-]+/g).filter((token) => token.length >= 4)
+    ])
+  );
+
+  return variants.some((variant) => {
+    const compactVariant = variant.replace(/[^a-z0-9]+/g, '');
+    if (!compactVariant) {
+      return false;
+    }
+    return (
+      candidate.startsWith(`${variant}_`) ||
+      candidate.startsWith(`${variant}-`) ||
+      candidate.endsWith(`_${variant}`) ||
+      candidate.endsWith(`-${variant}`) ||
+      candidate.includes(`_${variant}_`) ||
+      candidate.includes(`-${variant}-`) ||
+      compactCandidate.includes(compactVariant)
+    );
+  });
+};
+
+const normalizeBlockDeviceCandidates = (value: string): string[] => {
+  const raw = value.trim().toLowerCase();
+  if (!raw) {
+    return [];
+  }
+
+  const candidates = new Set<string>();
+  const push = (candidate: string): void => {
+    const normalized = slugify(candidate);
+    if (normalized && normalized !== 'unknown') {
+      candidates.add(normalized);
+    }
+  };
+
+  const baseName = raw
+    .replace(/\[[^\]]+\]/g, '')
+    .replace(/^.*\//g, '')
+    .trim();
+  if (!baseName) {
+    return [];
+  }
+
+  push(baseName);
+
+  const queue = [baseName];
+  while (queue.length > 0) {
+    const current = queue.pop() ?? '';
+    const patterns = [/^(.+)-part\d+$/, /^(nvme\d+n\d+)p\d+$/, /^(mmcblk\d+)p\d+$/, /^([a-z]+[a-z0-9]*)\d+$/];
+    for (const pattern of patterns) {
+      const match = current.match(pattern);
+      if (!match?.[1]) {
+        continue;
+      }
+
+      const normalized = slugify(match[1]);
+      if (!candidates.has(normalized)) {
+        push(match[1]);
+        queue.push(match[1]);
+      }
+    }
+  }
+
+  return Array.from(candidates);
+};
 
 const filesystemNameFromSlug = (slug: string): string => {
   if (slug === 'root') {

@@ -1,7 +1,7 @@
 # ugos-exporter
 
 <p align="center" style="text-align: center">
-    <img src="./assets/ugos-nas-exporter.png" width="70%">
+    <img src="./ugos-nas-exporter.png" width="70%">
 </p>
 
 Lightweight UGOS and Docker metrics exporter for Linux NAS hosts and Docker Compose stacks. It exposes host, filesystem, disk, RAID, network, GPU, and container metrics to Prometheus and MQTT/Home Assistant without the overhead of `cadvisor` plus a full node exporter stack.
@@ -30,6 +30,7 @@ UGOS boxes often end up running both NAS workloads and a pile of Docker Compose 
 - Physical disk throughput, IOPS, size, and busy percent
 - MD RAID / storage pool health and sync progress
 - Network throughput, link speed, carrier, errors, and drops
+- Top host software groups with CPU, RAM, and CPU time exposed through a JSON API
 - Bond interface monitoring from `/sys/class/net/*/bonding`, including mode, active slave, slave count, and per-slave link state
 - Basic GPU telemetry for `/dev/dri` devices with exposed sysfs counters
 - Optional Intel GPU engine/load/power telemetry via `intel_gpu_top`
@@ -50,6 +51,12 @@ UGOS boxes often end up running both NAS workloads and a pile of Docker Compose 
 
 The exporter reads the Docker Engine API directly. By default it uses `unix:///var/run/docker.sock`.
 Host metrics are disabled by default and require explicit bind mounts.
+
+## Repository Layout
+
+- `exporter/` - Go exporter app, internal packages, Dockerfiles, and compose example
+- `ha-cards/` - Home Assistant Lovelace cards
+- root - shared repo files like `go.mod`, release config, and top-level docs
 
 ## Metrics
 
@@ -75,6 +82,7 @@ Host metrics:
 - `ugos_exporter_host_temperature_celsius`
 - `ugos_exporter_host_fan_speed_rpm`
 - `ugos_exporter_host_cooling_device_*`
+- `ugos_exporter_host_process_group_*`
 
 Exporter health:
 
@@ -82,18 +90,22 @@ Exporter health:
 - `ugos_exporter_last_collection_timestamp_seconds`
 - `ugos_exporter_container_stats_errors`
 
+Additional HTTP APIs:
+
+- `/api/processes?limit=10&sort=cpu`
+
 ## Build
 
 Local binary:
 
 ```bash
-go build -o ugos-exporter .
+go build -o ./bin/ugos-exporter ./exporter
 ```
 
 Docker image:
 
 ```bash
-docker build -t ugos-exporter:latest .
+docker build -f exporter/Dockerfile -t ugos-exporter:latest .
 ```
 
 Published Docker Hub image:
@@ -105,7 +117,7 @@ docker pull rcooler/ugos-exporter:latest
 Docker Compose example:
 
 ```bash
-docker compose -f docker-compose.example.yml up -d --build
+docker compose -f exporter/docker-compose.example.yml up -d --build
 ```
 
 ## Run
@@ -113,7 +125,7 @@ docker compose -f docker-compose.example.yml up -d --build
 Local process:
 
 ```bash
-./ugos-exporter \
+./bin/ugos-exporter \
   --docker-host unix:///var/run/docker.sock \
   --listen-address :9877
 ```
@@ -147,6 +159,7 @@ docker run -d \
   -e UGOS_EXPORTER_HOST_NAME=ugreen-nas \
   -e UGOS_EXPORTER_HOST_HOSTNAME_PATH=/rootfs/etc/hostname \
   -e UGOS_EXPORTER_HOST_FILESYSTEMS='/:/rootfs,/volume1:/volume1,/volume2:/volume2' \
+  -e UGOS_EXPORTER_HOST_NETWORK_INCLUDE='eth.*,bond.*' \
   -e UGOS_EXPORTER_HOST_DRI_PATH=/dev/dri \
   -e UGOS_EXPORTER_MQTT_ENABLED=true \
   -e UGOS_EXPORTER_MQTT_BROKER=tcp://host.docker.internal:1883 \
@@ -166,7 +179,9 @@ Docker Compose:
 ```yaml
 services:
   ugos-exporter:
-    build: .
+    build:
+      context: .
+      dockerfile: exporter/Dockerfile
     restart: unless-stopped
     ports:
       - "9877:9877"
@@ -180,6 +195,7 @@ services:
       UGOS_EXPORTER_HOST_NAME: "ugreen-nas"
       UGOS_EXPORTER_HOST_HOSTNAME_PATH: "/rootfs/etc/hostname"
       UGOS_EXPORTER_HOST_FILESYSTEMS: "/:/rootfs,/volume1:/volume1,/volume2:/volume2"
+      UGOS_EXPORTER_HOST_NETWORK_INCLUDE: "eth.*,bond.*"
       UGOS_EXPORTER_HOST_DRI_PATH: "/dev/dri"
       # Optional richer Intel GPU metrics via intel_gpu_top:
       # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED: "true"
@@ -208,7 +224,7 @@ services:
     # pid: host
 ```
 
-Full example file: [docker-compose.example.yml](docker-compose.example.yml)
+Full example file: [exporter/docker-compose.example.yml](exporter/docker-compose.example.yml)
 
 ## Home Assistant Cards
 
@@ -246,16 +262,17 @@ Flags and env vars:
 - `--host-sysfs`, `UGOS_EXPORTER_HOST_SYSFS`
 - `--host-name`, `UGOS_EXPORTER_HOST_NAME`
 - `--host-hostname-path`, `UGOS_EXPORTER_HOST_HOSTNAME_PATH`
-
-`UGOS_EXPORTER_HOST_HOSTNAME_PATH` defaults to `/rootfs/etc/hostname`. With the recommended `/:/rootfs:ro` mount, that resolves to the NAS hostname instead of the container hostname.
-
-If UGOS still reports a container-style hostname such as a short hex ID, set `UGOS_EXPORTER_HOST_NAME` explicitly to the NAS name you want in Prometheus and Home Assistant.
 - `--host-filesystems`, `UGOS_EXPORTER_HOST_FILESYSTEMS`
+- `--host-network-include`, `UGOS_EXPORTER_HOST_NETWORK_INCLUDE`
 - `--host-dri-path`, `UGOS_EXPORTER_HOST_DRI_PATH`
 - `--host-intel-gpu-top-enabled`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED`
 - `--host-intel-gpu-top-path`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PATH`
 - `--host-intel-gpu-top-device`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_DEVICE`
 - `--host-intel-gpu-top-period`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PERIOD`
+
+`UGOS_EXPORTER_HOST_HOSTNAME_PATH` defaults to `/rootfs/etc/hostname`. With the recommended `/:/rootfs:ro` mount, that resolves to the NAS hostname instead of the container hostname.
+
+If UGOS still reports a container-style hostname such as a short hex ID, set `UGOS_EXPORTER_HOST_NAME` explicitly to the NAS name you want in Prometheus and Home Assistant.
 
 Preferred MQTT env vars:
 
@@ -279,6 +296,34 @@ Preferred MQTT env vars:
 ```text
 /:/rootfs,/volume1:/volume1,/volume2:/volume2
 ```
+
+`UGOS_EXPORTER_HOST_NETWORK_INCLUDE` is a comma-separated list of regular expressions used to decide which host interfaces are exposed. Matching is done against the whole interface name, so `eth.*` matches `eth0` but not `veth123`. The default is `eth.*,bond.*`, which keeps virtual interfaces such as `docker*`, `veth*`, and bridge devices out of the exported host network view. Set it to `.*` if you want every interface.
+
+## Process API
+
+The exporter exposes grouped host processes at `/api/processes`.
+
+- Default output is the top 10 software groups by CPU usage.
+- Multiple worker processes are merged into one software entry, so several `syncspace` processes are shown as `Sync & Backup`.
+- Known UGOS-related processes are normalized to friendly names such as `Docker`, `Virtual Machine`, and `Sync & Backup`.
+- The same top 10 groups are also exported to Prometheus as `ugos_exporter_host_process_group_*` metrics.
+- When MQTT/Home Assistant discovery is enabled, the same top 10 groups are published as per-software Home Assistant sensors under the host device tree.
+
+Examples:
+
+```bash
+curl http://localhost:9877/api/processes
+curl http://localhost:9877/api/processes?sort=memory&limit=10
+curl http://localhost:9877/api/processes?sort=time&limit=25
+```
+
+Each entry includes:
+
+- `name`
+- `process_count`
+- `cpu_percent`
+- `memory_bytes`
+- `cpu_time_seconds`
 
 ## Home Assistant
 

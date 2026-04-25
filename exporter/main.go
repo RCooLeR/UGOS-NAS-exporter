@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,11 +21,12 @@ import (
 	"github.com/rs/zerolog/log"
 	cli "github.com/urfave/cli/v2"
 
-	dockercollector "github.com/RCooLeR/ugos-exporter/internal/collectors/docker"
-	hostcollector "github.com/RCooLeR/ugos-exporter/internal/collectors/host"
-	"github.com/RCooLeR/ugos-exporter/internal/dockerapi"
-	mqttoutput "github.com/RCooLeR/ugos-exporter/internal/outputs/mqtt"
-	prometheusoutput "github.com/RCooLeR/ugos-exporter/internal/outputs/prometheus"
+	dockercollector "github.com/RCooLeR/ugos-exporter/exporter/internal/collectors/docker"
+	hostcollector "github.com/RCooLeR/ugos-exporter/exporter/internal/collectors/host"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/dockerapi"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	mqttoutput "github.com/RCooLeR/ugos-exporter/exporter/internal/outputs/mqtt"
+	prometheusoutput "github.com/RCooLeR/ugos-exporter/exporter/internal/outputs/prometheus"
 )
 
 var (
@@ -85,11 +89,31 @@ type config struct {
 	HostNameOverride       string
 	HostHostnamePath       string
 	HostFilesystems        []hostcollector.FilesystemMount
+	HostNetworkInclude     []string
 	HostDRIPath            string
 	HostIntelGPUTopEnabled bool
 	HostIntelGPUTopPath    string
 	HostIntelGPUTopDevice  string
 	HostIntelGPUTopPeriod  time.Duration
+}
+
+type snapshotStore struct {
+	mu       sync.RWMutex
+	snapshot model.Snapshot
+	ok       bool
+}
+
+func (s *snapshotStore) Set(snapshot model.Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshot = snapshot
+	s.ok = true
+}
+
+func (s *snapshotStore) Get() (model.Snapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshot, s.ok
 }
 
 func buildFlags() []cli.Flag {
@@ -120,6 +144,7 @@ func buildFlags() []cli.Flag {
 		&cli.StringFlag{Name: "host-name", EnvVars: []string{"UGOS_EXPORTER_HOST_NAME", "HOST_NAME"}},
 		&cli.StringFlag{Name: "host-hostname-path", Value: "/rootfs/etc/hostname", EnvVars: []string{"UGOS_EXPORTER_HOST_HOSTNAME_PATH", "HOST_HOSTNAME_PATH"}},
 		&cli.StringFlag{Name: "host-filesystems", Value: "/:/rootfs,/volume1:/volume1,/volume2:/volume2", EnvVars: []string{"UGOS_EXPORTER_HOST_FILESYSTEMS", "HOST_FILESYSTEMS"}},
+		&cli.StringFlag{Name: "host-network-include", Value: "eth.*,bond.*", EnvVars: []string{"UGOS_EXPORTER_HOST_NETWORK_INCLUDE", "HOST_NETWORK_INCLUDE"}},
 		&cli.StringFlag{Name: "host-dri-path", Value: "/dev/dri", EnvVars: []string{"UGOS_EXPORTER_HOST_DRI_PATH", "HOST_DRI_PATH"}},
 		&cli.BoolFlag{Name: "host-intel-gpu-top-enabled", EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED"}},
 		&cli.StringFlag{Name: "host-intel-gpu-top-path", Value: "intel_gpu_top", EnvVars: []string{"UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PATH"}},
@@ -155,6 +180,7 @@ func configFromCLI(c *cli.Context) (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("host-filesystems: %w", err)
 	}
+	hostNetworkInclude := parseCSV(c.String("host-network-include"))
 
 	return config{
 		ListenAddress:          c.String("listen-address"),
@@ -183,6 +209,7 @@ func configFromCLI(c *cli.Context) (config, error) {
 		HostNameOverride:       c.String("host-name"),
 		HostHostnamePath:       c.String("host-hostname-path"),
 		HostFilesystems:        hostFilesystems,
+		HostNetworkInclude:     hostNetworkInclude,
 		HostDRIPath:            c.String("host-dri-path"),
 		HostIntelGPUTopEnabled: c.Bool("host-intel-gpu-top-enabled"),
 		HostIntelGPUTopPath:    c.String("host-intel-gpu-top-path"),
@@ -217,6 +244,7 @@ func run(cfg config) error {
 			HostnameOverride:   cfg.HostNameOverride,
 			HostnamePath:       cfg.HostHostnamePath,
 			Filesystems:        cfg.HostFilesystems,
+			NetworkInclude:     cfg.HostNetworkInclude,
 			DRIPath:            cfg.HostDRIPath,
 			IntelGPUTopEnabled: cfg.HostIntelGPUTopEnabled,
 			IntelGPUTopPath:    cfg.HostIntelGPUTopPath,
@@ -255,10 +283,14 @@ func run(cfg config) error {
 	}
 
 	mux := http.NewServeMux()
+	state := &snapshotStore{}
 	mux.Handle(cfg.MetricsPath, promhttp.HandlerFor(registry, promhttp.HandlerOpts{EnableOpenMetrics: true}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/api/processes", func(w http.ResponseWriter, r *http.Request) {
+		handleProcessesAPI(w, r, state)
 	})
 
 	server := &http.Server{
@@ -302,6 +334,7 @@ func run(cfg config) error {
 			logger.Error().Err(collectErr).Msg("collection failed")
 			return
 		}
+		state.Set(snapshot)
 
 		if publisher != nil && (lastMQTTPublish.IsZero() || time.Since(lastMQTTPublish) >= cfg.MQTTInterval) {
 			if err := publisher.PublishSnapshot(snapshot); err != nil {
@@ -379,4 +412,113 @@ func parseFilesystemMounts(raw string) ([]hostcollector.FilesystemMount, error) 
 		})
 	}
 	return result, nil
+}
+
+func parseCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func handleProcessesAPI(w http.ResponseWriter, r *http.Request, state *snapshotStore) {
+	snapshot, ok := state.Get()
+	if !ok || snapshot.Host == nil {
+		http.Error(w, "host process data is not available yet", http.StatusServiceUnavailable)
+		return
+	}
+
+	limit := clampLimit(r.URL.Query().Get("limit"), 10, 100)
+	sortMode := normalizeProcessSort(r.URL.Query().Get("sort"))
+	processes := sortProcesses(snapshot.Host.Processes, sortMode)
+	if len(processes) > limit {
+		processes = processes[:limit]
+	}
+
+	payload := map[string]any{
+		"host":         snapshot.Host.Name,
+		"collected_at": snapshot.CollectedAt,
+		"sort":         sortMode,
+		"limit":        limit,
+		"processes":    processes,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(payload)
+}
+
+func clampLimit(raw string, fallback int, max int) int {
+	value := fallback
+	if trimmed := strings.TrimSpace(raw); trimmed != "" {
+		if parsed, err := strconv.Atoi(trimmed); err == nil {
+			value = parsed
+		}
+	}
+	if value < 1 {
+		return fallback
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func normalizeProcessSort(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "ram", "memory", "mem":
+		return "memory"
+	case "time", "cpu_time":
+		return "time"
+	case "name":
+		return "name"
+	default:
+		return "cpu"
+	}
+}
+
+func sortProcesses(processes []model.ProcessSnapshot, sortMode string) []model.ProcessSnapshot {
+	result := append([]model.ProcessSnapshot(nil), processes...)
+	switch sortMode {
+	case "memory":
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].MemoryBytes == result[j].MemoryBytes {
+				return result[i].Name < result[j].Name
+			}
+			return result[i].MemoryBytes > result[j].MemoryBytes
+		})
+	case "time":
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].CPUTimeSeconds == result[j].CPUTimeSeconds {
+				return result[i].Name < result[j].Name
+			}
+			return result[i].CPUTimeSeconds > result[j].CPUTimeSeconds
+		})
+	case "name":
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Name < result[j].Name
+		})
+	default:
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].CPUPercent == result[j].CPUPercent {
+				if result[i].MemoryBytes == result[j].MemoryBytes {
+					return result[i].Name < result[j].Name
+				}
+				return result[i].MemoryBytes > result[j].MemoryBytes
+			}
+			return result[i].CPUPercent > result[j].CPUPercent
+		})
+	}
+	return result
 }

@@ -134,6 +134,8 @@ export interface StoragePool {
   usedBytes: number;
   totalBytes: number;
   accent: string;
+  key?: string;
+  driveSlugs?: string[];
 }
 
 export interface DockerProject {
@@ -144,6 +146,7 @@ export interface DockerProject {
   runningContainers: number;
   totalContainers: number;
   status: ProjectStatus;
+  containers: DockerContainer[];
 }
 
 export interface DockerTotals {
@@ -175,6 +178,59 @@ export interface TrafficLine {
   series: number[];
 }
 
+export interface DockerContainer {
+  key: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  running: boolean;
+  cpuPercent: number;
+  memoryBytes: number;
+  memoryLimitBytes?: number;
+}
+
+export interface CpuCoreDetail {
+  key: string;
+  name: string;
+  usagePercent: number;
+  currentMHz?: number;
+  minMHz?: number;
+  maxMHz?: number;
+  governor?: string;
+}
+
+export interface RamBreakdownItem {
+  key: string;
+  label: string;
+  valueBytes: number;
+  totalBytes?: number;
+}
+
+export interface GpuEngineDetail {
+  key: string;
+  label: string;
+  busyPercent: number;
+  semaPercent?: number;
+  waitPercent?: number;
+}
+
+export interface GpuStatDetail {
+  key: string;
+  label: string;
+  value: number;
+  unit?: string;
+}
+
+export interface ProcessDetail {
+  key: string;
+  name: string;
+  processCount: number;
+  cpuPercent: number;
+  memoryBytes: number;
+  cpuTimeSeconds?: number;
+}
+
 export interface NasDashboardModel {
   deviceInfo: NasDeviceInfo;
   hardwareSummary: HardwareSummaryCard[];
@@ -186,4 +242,9 @@ export interface NasDashboardModel {
   networkInterfaces: NetworkInterfaceInfo[];
   networkTrafficHistory: TrafficPoint[];
   networkTrafficLines: TrafficLine[];
+  cpuCores: CpuCoreDetail[];
+  ramBreakdown: RamBreakdownItem[];
+  gpuEngines: GpuEngineDetail[];
+  gpuStats: GpuStatDetail[];
+  topProcesses: ProcessDetail[];
 }

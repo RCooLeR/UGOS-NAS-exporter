@@ -206,6 +206,46 @@ export const cardStyles = css`
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
   }
 
+  .interactive {
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    line-height: inherit;
+    text-align: left;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition:
+      border-color 160ms ease,
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .mini-card.interactive {
+    display: grid;
+    align-content: start;
+  }
+
+  .interactive.active {
+    border-color: rgba(126, 162, 255, 1);
+    box-shadow:
+      inset 0 0 0 1px rgba(126, 162, 255, 0.38),
+      0 0 0 1px rgba(126, 162, 255, 0.45),
+      0 0 18px rgba(126, 162, 255, 0.22);
+  }
+
+  .interactive:hover {
+    border-color: rgba(126, 162, 255, 0.7);
+  }
+
+  .interactive:focus-visible {
+    outline: none;
+    border-color: rgba(126, 162, 255, 1);
+    box-shadow:
+      inset 0 0 0 1px rgba(126, 162, 255, 0.3),
+      0 0 0 1px rgba(126, 162, 255, 0.4),
+      0 0 16px rgba(126, 162, 255, 0.18);
+  }
+
   .mini-card {
     padding: 12px 14px;
     display: grid;
@@ -322,6 +362,7 @@ export const cardStyles = css`
     padding: 14px;
     display: grid;
     gap: 12px;
+    border: 1px solid rgba(47, 103, 177, 0.34);
   }
 
   .card-head {
@@ -380,7 +421,7 @@ export const cardStyles = css`
 
   .table-wrap {
     padding: 0 12px 12px;
-    max-height: min(35vh, 376px);
+    max-height: min(50vh, 550px);
     overflow: auto;
     scrollbar-gutter: stable;
   }
@@ -461,6 +502,7 @@ export const cardStyles = css`
     padding: 12px;
     display: grid;
     gap: 8px;
+    border: 1px solid rgba(47, 103, 177, 0.34);
   }
 
   .pool-head {
@@ -543,6 +585,7 @@ export const cardStyles = css`
     grid-template-columns: 42px minmax(0, 1fr) auto;
     gap: 12px;
     align-items: center;
+    border: 1px solid rgba(47, 103, 177, 0.34);
   }
 
   .logo-chip {
@@ -616,6 +659,136 @@ export const cardStyles = css`
     height: 100%;
     background: linear-gradient(90deg, var(--ug-blue), var(--ug-purple));
     border-radius: inherit;
+  }
+
+  .detail-card-stack,
+  .detail-grid-cards {
+    display: grid;
+    gap: 12px;
+  }
+
+  .detail-grid-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-card,
+  .detail-stat-card {
+    padding: 14px;
+    border-radius: ${LAYOUT.cardRadius}px;
+    border: 1px solid rgba(47, 103, 177, 0.28);
+    background: linear-gradient(180deg, rgba(10, 24, 44, 0.94), rgba(7, 18, 34, 0.88));
+    display: grid;
+    gap: 12px;
+  }
+
+  .detail-card-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .detail-card-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .detail-card-logo {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    flex: 0 0 38px;
+  }
+
+  .detail-card-logo svg,
+  .detail-card-logo img {
+    width: 20px;
+    height: 20px;
+    max-width: 20px;
+    max-height: 20px;
+    display: block;
+  }
+
+  .detail-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ug-text-main);
+    min-width: 0;
+    word-break: break-word;
+  }
+
+  .detail-subtitle {
+    font-size: 12px;
+    color: var(--ug-text-soft);
+    min-width: 0;
+    word-break: break-word;
+  }
+
+  .detail-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .detail-metric-card {
+    display: grid;
+    gap: 4px;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .detail-metric-card span,
+  .detail-meta-list span {
+    color: var(--ug-text-soft);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .detail-metric-card strong,
+  .detail-meta-list strong {
+    color: var(--ug-text-main);
+    font-size: 13px;
+    word-break: break-word;
+  }
+
+  .detail-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--ug-text-main);
+  }
+
+  .detail-inline-bar {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .detail-inline-bar > span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--ug-cyan), var(--ug-blue));
+    min-width: 8px;
+  }
+
+  .detail-meta-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .detail-meta-list > div {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
   }
 
   .docker-summary-grid {
@@ -697,7 +870,7 @@ export const cardStyles = css`
   }
 
   .iface-card {
-    padding: 12px 6px;
+    padding: 12px 0px 0 6px;
     margin-bottom: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   }
@@ -709,7 +882,7 @@ export const cardStyles = css`
 
   .iface-main {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) repeat(4, minmax(0, auto));
+    grid-template-columns: repeat(5, minmax(60px, auto));
     gap: 14px;
     align-items: center;
     min-width: 0;
@@ -721,9 +894,10 @@ export const cardStyles = css`
 
   .iface-heading {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
+    align-items: start;
+    flex-direction: column;
+    gap: 0px;
+    min-width: 0px;
   }
 
   .iface-name {
@@ -733,8 +907,8 @@ export const cardStyles = css`
   .iface-stat {
     display: grid;
     gap: 4px;
-    min-width: 0;
-    padding-left: 14px;
+    min-width: 0px;
+    text-align: center;
     border-left: 1px solid rgba(255, 255, 255, 0.08);
   }
 
@@ -791,6 +965,11 @@ export const cardStyles = css`
     }
 
     .docker-item {
+      grid-template-columns: 1fr;
+    }
+
+    .detail-grid-cards,
+    .detail-metric-grid {
       grid-template-columns: 1fr;
     }
   }

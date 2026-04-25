@@ -49,6 +49,12 @@ import type {
 } from './types';
 
 const CUSTOM_CARD_TYPE = 'ugreen-nas-card';
+type DetailMetricKey = HardwareMetricCard['key'] | 'system-load';
+type DetailSelection =
+  | { kind: 'default' }
+  | { kind: 'pool'; key: string }
+  | { kind: 'project'; key: string }
+  | { kind: 'metric'; key: DetailMetricKey };
 
 const svgIcon = (path: string, color = 'currentColor', viewBox = '0 0 24 24') => svg`
   <svg viewBox=${viewBox} width="1em" height="1em" aria-hidden="true" focusable="false">
@@ -63,6 +69,7 @@ export class UgreenNasCard extends LitElement {
   @state() private _model: NasDashboardModel = fakeDashboardModel;
   @state() private _history: MetricHistoryState = emptyMetricHistoryState();
   @state() private _dataMode: 'preview' | 'missing' | 'live' = 'preview';
+  @state() private _detailSelection: DetailSelection = { kind: 'default' };
 
   private _hass?: HomeAssistantLike;
   private _watchEntityIds: string[] = [];
@@ -124,15 +131,16 @@ export class UgreenNasCard extends LitElement {
 
   private renderDeviceInfo(): TemplateResult {
     const { deviceInfo } = this._model;
+    const deviceTitle = this._config?.title ?? 'UGREEN DXP6800 Pro';
+    const identityRows = this.buildDeviceIdentityRows(deviceTitle, deviceInfo.model, deviceInfo.hostname);
 
     return html`
       <div class="panel">
         <div class="device-head">
-          <div class="device-title">${this._config?.title ?? 'UGREEN DXP6800 Pro'}</div>
+          <div class="device-title">${deviceTitle}</div>
           <div class="info-list">
-            ${this.renderInfoRow(mdiHomeOutline, 'Model', deviceInfo.model)}
+            ${identityRows}
             ${this.renderInfoRow(mdiClockOutline, 'Uptime', formatUptime(deviceInfo.uptimeSeconds))}
-            ${this.renderInfoRow(mdiServerNetwork, 'Hostname', deviceInfo.hostname)}
             ${this.renderInfoRow(mdiClockOutline, 'Time', deviceInfo.lastUpdated)}
           </div>
         </div>
@@ -183,6 +191,27 @@ export class UgreenNasCard extends LitElement {
           </div>
         `;
       case 'system-load':
+        if (this._model.topProcesses.length > 0) {
+          const isActive = this._detailSelection.kind === 'metric' && this._detailSelection.key === 'system-load';
+          return html`
+            <div
+              class=${isActive ? `${cardClass} interactive active` : `${cardClass} interactive`}
+              role="button"
+              tabindex="0"
+              @click=${() => this.toggleMetricDetail('system-load')}
+              @keydown=${(event: KeyboardEvent) =>
+                this.handleInteractiveCardKeydown(event, () => this.toggleMetricDetail('system-load'))}
+            >
+              <div class="mini-top">
+                ${svgIcon(this.summaryIcon(summary.kind), summary.accent)}
+                <span>${summary.title}</span>
+              </div>
+              <div class="mini-value">${summary.value.toFixed(2)}</div>
+              ${this.renderLineIndicator(this.loadIndicatorPercent(summary.value), summary.accent)}
+              <div class="mini-footer positive">${summary.statusText}</div>
+            </div>
+          `;
+        }
         return html`
           <div class=${cardClass}>
             <div class="mini-top">
@@ -256,8 +285,16 @@ export class UgreenNasCard extends LitElement {
   }
 
   private renderHardwareCard(metric: HardwareMetricCard): TemplateResult {
+    const isActive = this._detailSelection.kind === 'metric' && this._detailSelection.key === metric.key;
     return html`
-      <div class="hardware-card">
+      <div
+        class=${isActive ? 'hardware-card interactive active' : 'hardware-card interactive'}
+        role="button"
+        tabindex="0"
+        @click=${() => this.toggleMetricDetail(metric.key)}
+        @keydown=${(event: KeyboardEvent) =>
+          this.handleInteractiveCardKeydown(event, () => this.toggleMetricDetail(metric.key))}
+      >
         <div class="card-head">
           <div>
             <div class="metric-title" style=${`color:${metric.accent}`}>${metric.title}</div>
@@ -284,27 +321,15 @@ export class UgreenNasCard extends LitElement {
   }
 
   private renderDrivesSection(): TemplateResult {
+    const detailTitle = this.resolveDetailPanelTitle();
+
     return html`
       <div class="panel table-card">
-        <div class="panel-title">${svgIcon(mdiHarddisk, '#8fc1ff')} <span>Drives</span></div>
-        <div class="table-wrap">
-          ${this._model.drives.length === 0
-            ? html`<div class="empty-state">No live disk entities matched this host.</div>`
-            : html`<table>
-            <thead>
-              <tr>
-                <th>Drive</th>
-                <th>Capacity</th>
-                <th>I/O</th>
-                <th>Temp</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${this._model.drives.map((drive) => this.renderDriveRow(drive))}
-            </tbody>
-          </table>`}
+        <div class="panel-title">
+          ${svgIcon(detailTitle.icon, '#8fc1ff')}
+          <span>${detailTitle.label}</span>
         </div>
+        <div class="table-wrap">${this.renderDetailPanel()}</div>
       </div>
     `;
   }
@@ -337,9 +362,17 @@ export class UgreenNasCard extends LitElement {
   private renderStoragePool(pool: StoragePool): TemplateResult {
     const usagePercent = toPercent(pool.usedBytes, pool.totalBytes);
     const statusClass = pool.status === 'healthy' ? 'health' : `health ${pool.status}`;
+    const isActive = this._detailSelection.kind === 'pool' && this._detailSelection.key === (pool.key ?? pool.name);
 
     return html`
-      <div class="storage-card">
+      <div
+        class=${isActive ? 'storage-card interactive active' : 'storage-card interactive'}
+        role="button"
+        tabindex="0"
+        @click=${() => this.togglePoolDetail(pool)}
+        @keydown=${(event: KeyboardEvent) =>
+          this.handleInteractiveCardKeydown(event, () => this.togglePoolDetail(pool))}
+      >
         <div class="pool-head">
           <div>
             <div class="pool-title">${pool.name}</div>
@@ -388,9 +421,17 @@ export class UgreenNasCard extends LitElement {
     const memoryBarWidth = clamp((project.memoryBytes / Math.max(memoryMax, 1)) * 100, 8, 100);
     const statusClass = `docker-status status ${project.status}`;
     const logo = this.resolveProjectLogo(project.key);
+    const isActive = this._detailSelection.kind === 'project' && this._detailSelection.key === String(project.key);
 
     return html`
-      <div class="docker-item">
+      <div
+        class=${isActive ? 'docker-item interactive active' : 'docker-item interactive'}
+        role="button"
+        tabindex="0"
+        @click=${() => this.toggleProjectDetail(project)}
+        @keydown=${(event: KeyboardEvent) =>
+          this.handleInteractiveCardKeydown(event, () => this.toggleProjectDetail(project))}
+      >
         <div class="logo-chip" style=${`background:${logo.background ?? 'rgba(255, 255, 255, 0.04)'};`}>
           ${this.renderLogo(logo)}
         </div>
@@ -413,6 +454,289 @@ export class UgreenNasCard extends LitElement {
             <span class="metric-bar"><span style=${`width:${memoryBarWidth}%;`}></span></span>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  private renderDetailPanel(): TemplateResult {
+    switch (this._detailSelection.kind) {
+      case 'pool':
+        return this.renderFilteredDrives();
+      case 'project':
+        return this.renderDockerProjectDetails();
+      case 'metric':
+        if (this._detailSelection.key === 'cpu') {
+          return this.renderCpuCoreDetails();
+        }
+        if (this._detailSelection.key === 'ram') {
+          return this.renderRamDetails();
+        }
+        if (this._detailSelection.key === 'gpu') {
+          return this.renderGpuEngineDetails();
+        }
+        if (this._detailSelection.key === 'system-load') {
+          return this.renderTopProcessesDetails();
+        }
+        return this.renderDefaultDrives();
+      default:
+        return this.renderDefaultDrives();
+    }
+  }
+
+  private renderDefaultDrives(): TemplateResult {
+    if (this._model.drives.length === 0) {
+      return html`<div class="empty-state">No live disk entities matched this host.</div>`;
+    }
+
+    return this.renderDriveTable(this._model.drives);
+  }
+
+  private renderFilteredDrives(): TemplateResult {
+    const activePool = this.activeStoragePool();
+    if (!activePool) {
+      return this.renderDefaultDrives();
+    }
+
+    const driveSlugs = new Set(activePool.driveSlugs ?? []);
+    const drives = this._model.drives.filter((drive) => drive.diskSlug && driveSlugs.has(drive.diskSlug));
+    if (drives.length === 0) {
+      return html`<div class="empty-state">Drive membership is not available for this storage pool yet.</div>`;
+    }
+
+    return this.renderDriveTable(drives);
+  }
+
+  private renderDriveTable(drives: DriveInfo[]): TemplateResult {
+    return html`<table>
+      <thead>
+        <tr>
+          <th>Drive</th>
+          <th>Capacity</th>
+          <th>I/O</th>
+          <th>Temp</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${drives.map((drive) => this.renderDriveRow(drive))}
+      </tbody>
+    </table>`;
+  }
+
+  private renderDockerProjectDetails(): TemplateResult {
+    const activeProject = this.activeDockerProject();
+    if (!activeProject) {
+      return this.renderDefaultDrives();
+    }
+
+    if (activeProject.containers.length === 0) {
+      return html`<div class="empty-state">No live containers were linked to this Docker project.</div>`;
+    }
+
+    return html`
+      <div class="detail-card-stack">
+        ${activeProject.containers.map((container) => {
+          const logo = this.resolveProjectLogo(activeProject.key);
+          const memoryBarWidth = clamp(
+            ((container.memoryBytes ?? 0) / Math.max(container.memoryLimitBytes ?? container.memoryBytes ?? 1, 1)) * 100,
+            4,
+            100
+          );
+
+          return html`
+            <div class="detail-card">
+              <div class="detail-card-head">
+                <div class="detail-card-title">
+                  <span class="detail-card-logo" style=${`background:${logo.background ?? 'rgba(255,255,255,0.04)'};`}>
+                    ${this.renderLogo(logo)}
+                  </span>
+                  <div>
+                    <div class="detail-name">${container.name}</div>
+                    <div class="detail-subtitle">${container.image}</div>
+                  </div>
+                </div>
+                <span class=${container.running ? 'health' : 'health degraded'}>
+                  <span class="dot"></span>${container.running ? 'Running' : container.state}
+                </span>
+              </div>
+              <div class="detail-metric-grid">
+                <div class="detail-metric-card">
+                  <span>CPU</span>
+                  <strong>${formatProjectPercent(container.cpuPercent)}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>RAM</span>
+                  <strong>${formatBytes(container.memoryBytes, 0)}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>Limit</span>
+                  <strong>${container.memoryLimitBytes ? formatBytes(container.memoryLimitBytes, 0) : 'N/A'}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>Status</span>
+                  <strong>${container.status}</strong>
+                </div>
+              </div>
+              <div class="detail-inline-bar">
+                <span style=${`width:${memoryBarWidth}%;`}></span>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  private renderTopProcessesDetails(): TemplateResult {
+    if (this._model.topProcesses.length === 0) {
+      return html`<div class="empty-state">Top process data is not available from current Home Assistant entities.</div>`;
+    }
+
+    return html`
+      <div class="detail-card-stack">
+        ${this._model.topProcesses.map(
+          (process) => html`
+            <div class="detail-card">
+              <div class="detail-card-head">
+                <div class="detail-card-title">
+                  <div>
+                    <div class="detail-name">${process.name}</div>
+                    <div class="detail-subtitle">${this.formatProcessCount(process.processCount)}</div>
+                  </div>
+                </div>
+                <span class="health"><span class="dot"></span>${formatProjectPercent(process.cpuPercent)} CPU</span>
+              </div>
+              <div class="detail-metric-grid">
+                <div class="detail-metric-card">
+                  <span>CPU</span>
+                  <strong>${formatProjectPercent(process.cpuPercent)}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>RAM</span>
+                  <strong>${formatBytes(process.memoryBytes, 0)}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>CPU Time</span>
+                  <strong>${process.cpuTimeSeconds !== undefined ? formatUptime(process.cpuTimeSeconds) : 'N/A'}</strong>
+                </div>
+                <div class="detail-metric-card">
+                  <span>Count</span>
+                  <strong>${process.processCount}</strong>
+                </div>
+              </div>
+              <div class="detail-inline-bar">
+                <span style=${`width:${clamp(process.cpuPercent, 0, 100)}%;`}></span>
+              </div>
+            </div>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private renderCpuCoreDetails(): TemplateResult {
+    if (this._model.cpuCores.length === 0) {
+      return html`<div class="empty-state">Per-core CPU data is not available from current Home Assistant entities.</div>`;
+    }
+
+    return html`
+      <div class="detail-grid-cards">
+        ${this._model.cpuCores.map(
+          (core) => html`
+            <div class="detail-stat-card">
+              <div class="detail-name">${core.name}</div>
+              <div class="detail-stat-value">${formatPercent(core.usagePercent)}</div>
+              <div class="detail-inline-bar"><span style=${`width:${clamp(core.usagePercent, 0, 100)}%;`}></span></div>
+              <div class="detail-meta-list">
+                <div><span>Current</span><strong>${core.currentMHz ? `${Math.round(core.currentMHz)} MHz` : 'N/A'}</strong></div>
+                <div><span>Range</span><strong>${this.formatCpuCoreRange(core.minMHz, core.maxMHz)}</strong></div>
+                <div><span>Governor</span><strong>${core.governor ?? 'N/A'}</strong></div>
+              </div>
+            </div>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private renderRamDetails(): TemplateResult {
+    if (this._model.ramBreakdown.length === 0) {
+      return html`<div class="empty-state">RAM breakdown data is not available from current Home Assistant entities.</div>`;
+    }
+
+    return html`
+      <div class="detail-grid-cards">
+        ${this._model.ramBreakdown.map(
+          (item) => html`
+            <div class="detail-stat-card">
+              <div class="detail-name">${item.label}</div>
+              <div class="detail-stat-value">${formatBytes(item.valueBytes, 1)}</div>
+              ${item.totalBytes
+                ? html`
+                    <div class="detail-inline-bar">
+                      <span style=${`width:${clamp(toPercent(item.valueBytes, item.totalBytes), 0, 100)}%;`}></span>
+                    </div>
+                    <div class="detail-meta-list">
+                      <div><span>Usage</span><strong>${formatPercent(toPercent(item.valueBytes, item.totalBytes))}</strong></div>
+                      <div><span>Total</span><strong>${formatBytes(item.totalBytes, 1)}</strong></div>
+                    </div>
+                  `
+                : html`
+                    <div class="detail-meta-list">
+                      <div><span>Value</span><strong>${formatBytes(item.valueBytes, 1)}</strong></div>
+                    </div>
+                  `}
+            </div>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private renderGpuEngineDetails(): TemplateResult {
+    if (this._model.gpuEngines.length === 0 && this._model.gpuStats.length === 0) {
+      return html`<div class="empty-state">GPU detail metrics are not available from current Home Assistant entities.</div>`;
+    }
+
+    return html`
+      <div class="detail-card-stack">
+        ${this._model.gpuStats.length > 0
+          ? html`
+              <div class="detail-card">
+                <div class="detail-name">GPU Stats</div>
+                <div class="detail-metric-grid">
+                  ${this._model.gpuStats.map(
+                    (stat) => html`
+                      <div class="detail-metric-card">
+                        <span>${stat.label}</span>
+                        <strong>${this.formatGpuStatValue(stat.value, stat.unit)}</strong>
+                      </div>
+                    `
+                  )}
+                </div>
+              </div>
+            `
+          : html``}
+        ${this._model.gpuEngines.length > 0
+          ? html`
+              <div class="detail-grid-cards">
+                ${this._model.gpuEngines.map(
+                  (engine) => html`
+                    <div class="detail-stat-card">
+                      <div class="detail-name">${engine.label}</div>
+                      <div class="detail-stat-value">${formatPercent(engine.busyPercent)}</div>
+                      <div class="detail-inline-bar"><span style=${`width:${clamp(engine.busyPercent, 0, 100)}%;`}></span></div>
+                      <div class="detail-meta-list">
+                        <div><span>Busy</span><strong>${formatPercent(engine.busyPercent)}</strong></div>
+                        <div><span>Sema</span><strong>${engine.semaPercent !== undefined ? formatPercent(engine.semaPercent) : 'N/A'}</strong></div>
+                        <div><span>Wait</span><strong>${engine.waitPercent !== undefined ? formatPercent(engine.waitPercent) : 'N/A'}</strong></div>
+                      </div>
+                    </div>
+                  `
+                )}
+              </div>
+            `
+          : html``}
       </div>
     `;
   }
@@ -511,12 +835,166 @@ export class UgreenNasCard extends LitElement {
     return html`<div class="info-row">${svgIcon(icon, '#8fb9ff')} <span>${label}</span> <strong>${value}</strong></div>`;
   }
 
+  private buildDeviceIdentityRows(title: string, model: string, hostname: string): TemplateResult[] {
+    const seen = new Set<string>([this.normalizeHeaderValue(title)]);
+    const rows: TemplateResult[] = [];
+
+    const pushRow = (icon: string, label: string, value: string): void => {
+      const normalizedValue = this.normalizeHeaderValue(value);
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return;
+      }
+
+      seen.add(normalizedValue);
+      rows.push(this.renderInfoRow(icon, label, value));
+    };
+
+    pushRow(mdiHomeOutline, 'Model', model);
+    pushRow(mdiServerNetwork, 'Hostname', hostname);
+
+    return rows;
+  }
+
+  private normalizeHeaderValue(value: string | undefined): string {
+    return String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, '');
+  }
+
   private renderDriveCountValue(value: string | undefined): string {
     if (!value) {
       return 'N/A';
     }
 
     return value.replace(/^Drives\s+/i, '');
+  }
+
+  private resolveDetailPanelTitle(): { label: string; icon: string } {
+    if (this._detailSelection.kind === 'pool') {
+      const pool = this.activeStoragePool();
+      return { label: pool ? `${pool.name} Drives` : 'Drives', icon: mdiHarddisk };
+    }
+    if (this._detailSelection.kind === 'project') {
+      const project = this.activeDockerProject();
+      return { label: project ? `${project.title} Containers` : 'Docker Project', icon: mdiViewGridOutline };
+    }
+    if (this._detailSelection.kind === 'metric') {
+      switch (this._detailSelection.key) {
+        case 'cpu':
+          return { label: 'CPU Cores', icon: mdiChip };
+        case 'ram':
+          return { label: 'RAM Breakdown', icon: mdiMemory };
+        case 'gpu':
+          return { label: 'GPU Details', icon: mdiVideo };
+        case 'system-load':
+          return { label: 'Top Processes', icon: mdiSineWave };
+        default:
+          break;
+      }
+    }
+    return { label: 'Drives', icon: mdiHarddisk };
+  }
+
+  private togglePoolDetail(pool: StoragePool): void {
+    const key = pool.key ?? pool.name;
+    this.applyDetailSelection(
+      this._detailSelection.kind === 'pool' && this._detailSelection.key === key ? { kind: 'default' } : { kind: 'pool', key }
+    );
+  }
+
+  private toggleProjectDetail(project: DockerProject): void {
+    const key = String(project.key);
+    this.applyDetailSelection(
+      this._detailSelection.kind === 'project' && this._detailSelection.key === key
+        ? { kind: 'default' }
+        : { kind: 'project', key }
+    );
+  }
+
+  private toggleMetricDetail(metricKey: DetailMetricKey): void {
+    if (metricKey !== 'cpu' && metricKey !== 'ram' && metricKey !== 'gpu' && metricKey !== 'system-load') {
+      return;
+    }
+
+    this.applyDetailSelection(
+      this._detailSelection.kind === 'metric' && this._detailSelection.key === metricKey
+        ? { kind: 'default' }
+        : { kind: 'metric', key: metricKey }
+    );
+  }
+
+  private handleInteractiveCardKeydown(event: KeyboardEvent, action: () => void): void {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+      return;
+    }
+
+    event.preventDefault();
+    action();
+  }
+
+  private applyDetailSelection(selection: DetailSelection): void {
+    this._detailSelection = selection;
+    void this.updateComplete.then(() => {
+      this.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  private activeStoragePool(): StoragePool | undefined {
+    if (this._detailSelection.kind !== 'pool') {
+      return undefined;
+    }
+
+    const selectionKey = this._detailSelection.key;
+    return this._model.storagePools.find((pool) => (pool.key ?? pool.name) === selectionKey);
+  }
+
+  private activeDockerProject(): DockerProject | undefined {
+    if (this._detailSelection.kind !== 'project') {
+      return undefined;
+    }
+
+    const selectionKey = this._detailSelection.key;
+    return this._model.dockerProjects.find((project) => String(project.key) === selectionKey);
+  }
+
+  private formatCpuCoreRange(minMHz: number | undefined, maxMHz: number | undefined): string {
+    if (minMHz === undefined && maxMHz === undefined) {
+      return 'N/A';
+    }
+    if (minMHz === undefined) {
+      return `<= ${Math.round(maxMHz ?? 0)} MHz`;
+    }
+    if (maxMHz === undefined) {
+      return `${Math.round(minMHz)}+ MHz`;
+    }
+    return `${Math.round(minMHz)}-${Math.round(maxMHz)} MHz`;
+  }
+
+  private formatGpuStatValue(value: number, unit: string | undefined): string {
+    if (unit === '%') {
+      return formatPercent(value);
+    }
+    if (unit === 'W') {
+      return `${value.toFixed(value >= 10 ? 1 : 2)} W`;
+    }
+    if (unit === 'MHz') {
+      return `${Math.round(value)} MHz`;
+    }
+    if (unit === 'ms') {
+      return `${value.toFixed(2)} ms`;
+    }
+    if (unit === 'MiB/s') {
+      return `${value.toFixed(value >= 10 ? 1 : 2)} MiB/s`;
+    }
+    if (unit === '/s') {
+      return `${value.toFixed(value >= 10 ? 0 : 2)}/s`;
+    }
+    return `${value}${unit ? ` ${unit}` : ''}`;
+  }
+
+  private formatProcessCount(count: number): string {
+    return `${count} ${count === 1 ? 'process' : 'processes'}`;
   }
 
   private resolveProjectLogo(projectKey: DockerProject['key']): ProjectLogo {
@@ -622,6 +1100,7 @@ export class UgreenNasCard extends LitElement {
         this._model = fakeDashboardModel;
         this._dataMode = 'preview';
       }
+      this._detailSelection = { kind: 'default' };
       this._history = emptyMetricHistoryState();
       this._watchEntityIds = [];
       this._watchPrefixes = [];
@@ -632,6 +1111,7 @@ export class UgreenNasCard extends LitElement {
     this._watchEntityIds = liveModel.watchEntityIds;
     this._watchPrefixes = liveModel.watchPrefixes;
     this._model = liveModel.model;
+    this._detailSelection = this.isDetailSelectionAvailable(this._detailSelection) ? this._detailSelection : { kind: 'default' };
     this._dataMode = 'live';
   }
 
@@ -665,6 +1145,31 @@ export class UgreenNasCard extends LitElement {
       }
     }
     return count;
+  }
+
+  private isDetailSelectionAvailable(selection: DetailSelection): boolean {
+    switch (selection.kind) {
+      case 'pool':
+        return this._model.storagePools.some((pool) => (pool.key ?? pool.name) === selection.key);
+      case 'project':
+        return this._model.dockerProjects.some((project) => String(project.key) === selection.key);
+      case 'metric':
+        if (selection.key === 'cpu') {
+          return this._model.cpuCores.length > 0;
+        }
+        if (selection.key === 'ram') {
+          return this._model.ramBreakdown.length > 0;
+        }
+        if (selection.key === 'gpu') {
+          return this._model.gpuEngines.length > 0 || this._model.gpuStats.length > 0;
+        }
+        if (selection.key === 'system-load') {
+          return this._model.topProcesses.length > 0;
+        }
+        return false;
+      default:
+        return true;
+    }
   }
 
 }

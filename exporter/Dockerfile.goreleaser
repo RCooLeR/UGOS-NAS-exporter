@@ -1,9 +1,12 @@
 FROM debian:bookworm-slim
 
 ARG TARGETPLATFORM
+ARG TARGETARCH
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates intel-gpu-tools \
+    && packages="ca-certificates" \
+    && if [ "$TARGETARCH" = "amd64" ]; then packages="$packages intel-gpu-tools"; fi \
+    && apt-get install --no-install-recommends -y $packages \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /

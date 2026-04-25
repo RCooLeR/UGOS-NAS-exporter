@@ -44,6 +44,7 @@ type HostSnapshot struct {
 	GPUs        []GPUSnapshot
 	Sensors     []SensorSnapshot
 	Cooling     []CoolingDeviceSnapshot
+	Processes   []ProcessSnapshot
 }
 
 type HostCPUSnapshot struct {
@@ -190,16 +191,16 @@ type GPUSnapshot struct {
 }
 
 type IntelGPUSnapshot struct {
-	ActualMHz         float64
-	RequestedMHz      float64
-	IMCReadsMiBPerSec float64
+	ActualMHz          float64
+	RequestedMHz       float64
+	IMCReadsMiBPerSec  float64
 	IMCWritesMiBPerSec float64
-	InterruptsPerSec  float64
+	InterruptsPerSec   float64
 	PeriodMilliseconds float64
-	GPUPowerWatts     float64
-	PackagePowerWatts float64
-	RC6Percent        float64
-	Engines           []GPUEngineSnapshot
+	GPUPowerWatts      float64
+	PackagePowerWatts  float64
+	RC6Percent         float64
+	Engines            []GPUEngineSnapshot
 }
 
 type GPUEngineSnapshot struct {
@@ -221,9 +222,17 @@ type SensorSnapshot struct {
 }
 
 type CoolingDeviceSnapshot struct {
-	Name      string
-	Type      string
-	CurState  int64
-	MaxState  int64
-	Percent   float64
+	Name     string
+	Type     string
+	CurState int64
+	MaxState int64
+	Percent  float64
+}
+
+type ProcessSnapshot struct {
+	Name           string
+	ProcessCount   int
+	CPUPercent     float64
+	MemoryBytes    uint64
+	CPUTimeSeconds float64
 }

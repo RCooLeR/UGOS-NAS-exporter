@@ -22,7 +22,7 @@ import (
 	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
-	"github.com/RCooLeR/ugos-exporter/internal/model"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
 )
 
 type FilesystemMount struct {
@@ -36,6 +36,7 @@ type Config struct {
 	HostnamePath       string
 	HostnameOverride   string
 	Filesystems        []FilesystemMount
+	NetworkInclude     []string
 	DRIPath            string
 	IntelGPUTopEnabled bool
 	IntelGPUTopPath    string
@@ -44,14 +45,16 @@ type Config struct {
 }
 
 type Collector struct {
-	cfg      Config
-	proc     procfs.FS
-	block    blockdevice.FS
-	mu       sync.Mutex
-	lastAt   time.Time
-	lastCPU  cpuSnapshot
-	lastNet  map[string]procfs.NetDevLine
-	lastDisk map[string]diskSample
+	cfg            Config
+	proc           procfs.FS
+	block          blockdevice.FS
+	networkInclude []*regexp.Regexp
+	mu             sync.Mutex
+	lastAt         time.Time
+	lastCPU        cpuSnapshot
+	lastNet        map[string]procfs.NetDevLine
+	lastDisk       map[string]diskSample
+	lastProc       map[int]processSample
 }
 
 type cpuSnapshot struct {
@@ -104,10 +107,11 @@ type intelGPUTopSample struct {
 }
 
 var (
-	poolMapperPattern = regexp.MustCompile(`(?:^|_)(pool\d+)(?:-|$)`)
-	nvmeControllerPat = regexp.MustCompile(`^nvme\d+$`)
-	nvmeDiskPattern   = regexp.MustCompile(`^nvme\d+n\d+$`)
-	mmcDiskPattern    = regexp.MustCompile(`^mmcblk\d+$`)
+	defaultNetworkIncludePatterns = []string{`^eth.*$`, `^bond.*$`}
+	poolMapperPattern             = regexp.MustCompile(`(?:^|_)(pool\d+)(?:-|$)`)
+	nvmeControllerPat             = regexp.MustCompile(`^nvme\d+$`)
+	nvmeDiskPattern               = regexp.MustCompile(`^nvme\d+n\d+$`)
+	mmcDiskPattern                = regexp.MustCompile(`^mmcblk\d+$`)
 )
 
 func New(cfg Config) (*Collector, error) {
@@ -134,13 +138,19 @@ func New(cfg Config) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open blockdevice fs: %w", err)
 	}
+	networkInclude, err := compileRegexList(cfg.NetworkInclude, defaultNetworkIncludePatterns)
+	if err != nil {
+		return nil, fmt.Errorf("compile network include rules: %w", err)
+	}
 
 	return &Collector{
-		cfg:      cfg,
-		proc:     proc,
-		block:    blockFS,
-		lastNet:  map[string]procfs.NetDevLine{},
-		lastDisk: map[string]diskSample{},
+		cfg:            cfg,
+		proc:           proc,
+		block:          blockFS,
+		networkInclude: networkInclude,
+		lastNet:        map[string]procfs.NetDevLine{},
+		lastDisk:       map[string]diskSample{},
+		lastProc:       map[int]processSample{},
 	}, nil
 }
 
@@ -195,6 +205,7 @@ func (c *Collector) Collect(_ context.Context) (model.HostSnapshot, error) {
 	}
 
 	c.mu.Lock()
+	elapsed := now.Sub(c.lastAt).Seconds()
 	snapshot.CPU.UsagePercent = cpuUsagePercent(c.lastCPU.total, stat.CPUTotal)
 	cores := make([]model.CPUCoreSnapshot, 0, len(stat.CPU))
 	var totalCurrentMHz float64
@@ -219,6 +230,7 @@ func (c *Collector) Collect(_ context.Context) (model.HostSnapshot, error) {
 	c.lastCPU = cpuSnapshot{total: stat.CPUTotal, cores: cloneCPUMap(stat.CPU)}
 	snapshot.Networks = c.collectNetworksLocked(now, netdev)
 	snapshot.Disks = c.collectDisksLocked(now, diskstats)
+	snapshot.Processes = c.collectProcessesLocked(elapsed)
 	c.lastAt = now
 	c.mu.Unlock()
 
@@ -535,6 +547,10 @@ func (c *Collector) collectNetworksLocked(now time.Time, netdev procfs.NetDev) [
 		if name == "lo" {
 			continue
 		}
+		if !matchesRegex(name, c.networkInclude) {
+			delete(c.lastNet, name)
+			continue
+		}
 
 		sysBase := filepath.Join(c.cfg.SysFS, "class", "net", name)
 		speed, _ := readIntFile(filepath.Join(sysBase, "speed"))
@@ -582,6 +598,9 @@ func (c *Collector) collectBonds() []model.BondSnapshot {
 	result := make([]model.BondSnapshot, 0, len(matches))
 	for _, bondingPath := range matches {
 		bondName := filepath.Base(filepath.Dir(bondingPath))
+		if !matchesRegex(bondName, c.networkInclude) {
+			continue
+		}
 		sysBase := filepath.Join(c.cfg.SysFS, "class", "net", bondName)
 		activeSlave := strings.TrimSpace(readTextFile(filepath.Join(bondingPath, "active_slave")))
 		slaveNames := strings.Fields(readTextFile(filepath.Join(bondingPath, "slaves")))
@@ -1397,4 +1416,37 @@ func clampPercent(value float64) float64 {
 		return 100
 	}
 	return value
+}
+
+func compileRegexList(values []string, defaults []string) ([]*regexp.Regexp, error) {
+	source := values
+	if len(source) == 0 {
+		source = defaults
+	}
+
+	result := make([]*regexp.Regexp, 0, len(source))
+	for _, value := range source {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		compiled, err := regexp.Compile("^(?:" + trimmed + ")$")
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, compiled)
+	}
+	return result, nil
+}
+
+func matchesRegex(value string, patterns []*regexp.Regexp) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		if pattern.MatchString(value) {
+			return true
+		}
+	}
+	return false
 }

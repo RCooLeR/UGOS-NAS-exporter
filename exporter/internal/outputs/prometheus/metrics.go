@@ -6,7 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/RCooLeR/ugos-exporter/internal/model"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
 )
 
 type Metrics struct {
@@ -68,6 +68,10 @@ type Metrics struct {
 	hostFanSpeed           *prometheus.GaugeVec
 	hostCoolingState       *prometheus.GaugeVec
 	hostCoolingPercent     *prometheus.GaugeVec
+	hostProcessCount       *prometheus.GaugeVec
+	hostProcessCPU         *prometheus.GaugeVec
+	hostProcessMemory      *prometheus.GaugeVec
+	hostProcessCPUTime     *prometheus.GaugeVec
 
 	up             prometheus.Gauge
 	lastCollection prometheus.Gauge
@@ -305,6 +309,22 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 			Name: "ugos_exporter_host_cooling_device_percent",
 			Help: "Host thermal cooling device state normalized to percent when max_state is available.",
 		}, []string{"host", "device", "type"}),
+		hostProcessCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_host_process_group_count",
+			Help: "Number of OS processes in a grouped host software entry. Exported for the top host software groups by CPU usage.",
+		}, []string{"host", "software"}),
+		hostProcessCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_host_process_group_cpu_usage_percent",
+			Help: "CPU usage percentage for a grouped host software entry. Exported for the top host software groups by CPU usage.",
+		}, []string{"host", "software"}),
+		hostProcessMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_host_process_group_memory_bytes",
+			Help: "Resident memory usage for a grouped host software entry. Exported for the top host software groups by CPU usage.",
+		}, []string{"host", "software"}),
+		hostProcessCPUTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_host_process_group_cpu_time_seconds",
+			Help: "Accumulated CPU time for a grouped host software entry. Exported for the top host software groups by CPU usage.",
+		}, []string{"host", "software"}),
 
 		up: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "ugos_exporter_up",
@@ -378,6 +398,10 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 		m.hostFanSpeed,
 		m.hostCoolingState,
 		m.hostCoolingPercent,
+		m.hostProcessCount,
+		m.hostProcessCPU,
+		m.hostProcessMemory,
+		m.hostProcessCPUTime,
 		m.up,
 		m.lastCollection,
 		m.statsErrors,
@@ -445,6 +469,10 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 	m.hostFanSpeed.Reset()
 	m.hostCoolingState.Reset()
 	m.hostCoolingPercent.Reset()
+	m.hostProcessCount.Reset()
+	m.hostProcessCPU.Reset()
+	m.hostProcessMemory.Reset()
+	m.hostProcessCPUTime.Reset()
 
 	if err != nil {
 		m.up.Set(0)
@@ -636,6 +664,18 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 		if cooling.MaxState > 0 {
 			m.hostCoolingPercent.WithLabelValues(hostName, cooling.Name, cooling.Type).Set(cooling.Percent)
 		}
+	}
+
+	processes := snapshot.Host.Processes
+	if len(processes) > 10 {
+		processes = processes[:10]
+	}
+	for _, process := range processes {
+		labels := []string{hostName, process.Name}
+		m.hostProcessCount.WithLabelValues(labels...).Set(float64(process.ProcessCount))
+		m.hostProcessCPU.WithLabelValues(labels...).Set(process.CPUPercent)
+		m.hostProcessMemory.WithLabelValues(labels...).Set(float64(process.MemoryBytes))
+		m.hostProcessCPUTime.WithLabelValues(labels...).Set(process.CPUTimeSeconds)
 	}
 }
 

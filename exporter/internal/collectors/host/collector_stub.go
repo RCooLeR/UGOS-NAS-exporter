@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/RCooLeR/ugos-exporter/internal/model"
+	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
 )
 
 type FilesystemMount struct {
@@ -16,12 +16,13 @@ type FilesystemMount struct {
 }
 
 type Config struct {
-	ProcFS           string
-	SysFS            string
-	HostnamePath     string
-	HostnameOverride string
-	Filesystems      []FilesystemMount
-	DRIPath          string
+	ProcFS             string
+	SysFS              string
+	HostnamePath       string
+	HostnameOverride   string
+	Filesystems        []FilesystemMount
+	NetworkInclude     []string
+	DRIPath            string
 	IntelGPUTopEnabled bool
 	IntelGPUTopPath    string
 	IntelGPUTopDevice  string
