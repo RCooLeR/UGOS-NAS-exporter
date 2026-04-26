@@ -71,6 +71,7 @@ type config struct {
 	ProjectLabel           string
 	StandaloneProjectName  string
 	ContainerConcurrency   int
+	DetailedContainerStats bool
 	MQTTEnabled            bool
 	MQTTBroker             string
 	MQTTClientID           string
@@ -126,6 +127,7 @@ func buildFlags() []cli.Flag {
 		&cli.StringFlag{Name: "project-label", Value: "com.docker.compose.project", EnvVars: []string{"UGOS_EXPORTER_PROJECT_LABEL", "DOCKER_PROJECT_LABEL"}},
 		&cli.StringFlag{Name: "standalone-project-name", Value: "standalone", EnvVars: []string{"UGOS_EXPORTER_STANDALONE_PROJECT_NAME", "STANDALONE_PROJECT_NAME"}},
 		&cli.IntFlag{Name: "container-concurrency", Value: 4, EnvVars: []string{"UGOS_EXPORTER_CONTAINER_CONCURRENCY", "CONTAINER_CONCURRENCY"}},
+		&cli.BoolFlag{Name: "detailed-container-stats", EnvVars: []string{"UGOS_EXPORTER_DETAILED_CONTAINER_STATS", "DETAILED_CONTAINER_STATS"}},
 		&cli.BoolFlag{Name: "mqtt-enabled", EnvVars: []string{"UGOS_EXPORTER_MQTT_ENABLED"}},
 		&cli.StringFlag{Name: "mqtt-broker", EnvVars: []string{"UGOS_EXPORTER_MQTT_BROKER", "MQTT_BROKER"}},
 		&cli.StringFlag{Name: "mqtt-client-id", Value: "ugos-exporter", EnvVars: []string{"UGOS_EXPORTER_MQTT_CLIENT_ID", "MQTT_CLIENT_ID"}},
@@ -191,6 +193,7 @@ func configFromCLI(c *cli.Context) (config, error) {
 		ProjectLabel:           c.String("project-label"),
 		StandaloneProjectName:  c.String("standalone-project-name"),
 		ContainerConcurrency:   concurrency,
+		DetailedContainerStats: c.Bool("detailed-container-stats"),
 		MQTTEnabled:            c.Bool("mqtt-enabled"),
 		MQTTBroker:             c.String("mqtt-broker"),
 		MQTTClientID:           c.String("mqtt-client-id"),
@@ -230,10 +233,11 @@ func run(cfg config) error {
 	}
 
 	dockerCollector := dockercollector.New(dockerClient, dockercollector.Config{
-		ProjectLabel:          cfg.ProjectLabel,
-		StandaloneProjectName: cfg.StandaloneProjectName,
-		ContainerConcurrency:  cfg.ContainerConcurrency,
-		Log:                   logger,
+		ProjectLabel:           cfg.ProjectLabel,
+		StandaloneProjectName:  cfg.StandaloneProjectName,
+		ContainerConcurrency:   cfg.ContainerConcurrency,
+		DetailedContainerStats: cfg.DetailedContainerStats,
+		Log:                    logger,
 	})
 
 	var hostCollector *hostcollector.Collector

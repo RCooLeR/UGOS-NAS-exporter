@@ -15,20 +15,26 @@ import (
 )
 
 type DockerClient interface {
-	ListContainers(ctx context.Context) ([]dockerapi.ContainerSummary, error)
+	ListContainers(ctx context.Context, includeSize bool) ([]dockerapi.ContainerSummary, error)
 	ContainerStats(ctx context.Context, containerID string) (dockerapi.ContainerStats, error)
+	ContainerInspect(ctx context.Context, containerID string) (dockerapi.ContainerInspect, error)
+	ContainerOOMEvents(ctx context.Context, since time.Time, until time.Time) ([]dockerapi.ContainerEvent, error)
 }
 
 type Config struct {
-	ProjectLabel          string
-	StandaloneProjectName string
-	ContainerConcurrency  int
-	Log                   zerolog.Logger
+	ProjectLabel           string
+	StandaloneProjectName  string
+	ContainerConcurrency   int
+	DetailedContainerStats bool
+	Log                    zerolog.Logger
 }
 
 type Collector struct {
-	client DockerClient
-	cfg    Config
+	client              DockerClient
+	cfg                 Config
+	oomEventsMu         sync.Mutex
+	oomEventsByID       map[string]uint64
+	lastOOMEventsLookup time.Time
 }
 
 func New(client DockerClient, cfg Config) *Collector {
@@ -42,12 +48,27 @@ func New(client DockerClient, cfg Config) *Collector {
 		cfg.ContainerConcurrency = 1
 	}
 
-	return &Collector{client: client, cfg: cfg}
+	collector := &Collector{
+		client: client,
+		cfg:    cfg,
+	}
+	if cfg.DetailedContainerStats {
+		collector.oomEventsByID = make(map[string]uint64)
+		collector.lastOOMEventsLookup = time.Now().UTC()
+	}
+	return collector
 }
 
 func (c *Collector) Collect(ctx context.Context) (model.Snapshot, error) {
 	collectedAt := time.Now().UTC()
-	containers, err := c.client.ListContainers(ctx)
+	var (
+		oomEvents map[string]uint64
+		oomErr    error
+	)
+	if c.cfg.DetailedContainerStats {
+		oomEvents, oomErr = c.collectOOMEvents(ctx, collectedAt)
+	}
+	containers, err := c.client.ListContainers(ctx, c.cfg.DetailedContainerStats)
 	if err != nil {
 		return model.Snapshot{CollectedAt: collectedAt}, err
 	}
@@ -87,6 +108,19 @@ func (c *Collector) Collect(ctx context.Context) (model.Snapshot, error) {
 			snapshot.CPUPercent = cpuPercent(stats)
 			snapshot.MemoryUsageBytes = memoryUsageBytes(stats.MemoryStats)
 			snapshot.MemoryLimitBytes = stats.MemoryStats.Limit
+			if c.cfg.DetailedContainerStats {
+				detailed := detailedSnapshot(summary, stats)
+				detailed.OOMEvents = oomEvents[summary.ID]
+				inspect, inspectErr := c.client.ContainerInspect(ctx, summary.ID)
+				if inspectErr != nil {
+					errorMu.Lock()
+					statsErrors = append(statsErrors, fmt.Sprintf("%s inspect: %v", snapshot.Name, inspectErr))
+					errorMu.Unlock()
+				} else {
+					applyInspectDetails(&detailed, inspect)
+				}
+				snapshot.Detailed = &detailed
+			}
 			snapshot.StatsCollected = true
 			result[i] = snapshot
 		}(idx, container)
@@ -112,7 +146,29 @@ func (c *Collector) Collect(ctx context.Context) (model.Snapshot, error) {
 		c.cfg.Log.Warn().Int("containers_failed", len(statsErrors)).Msg("partial container stats collection")
 	}
 
+	if oomErr != nil {
+		c.cfg.Log.Warn().Err(oomErr).Msg("failed to refresh container oom events")
+	}
+
 	return snapshot, nil
+}
+
+func (c *Collector) collectOOMEvents(ctx context.Context, collectedAt time.Time) (map[string]uint64, error) {
+	c.oomEventsMu.Lock()
+	defer c.oomEventsMu.Unlock()
+
+	events, err := c.client.ContainerOOMEvents(ctx, c.lastOOMEventsLookup, collectedAt)
+	if err != nil {
+		return cloneOOMEvents(c.oomEventsByID), err
+	}
+	for _, event := range events {
+		if event.Actor.ID == "" {
+			continue
+		}
+		c.oomEventsByID[event.Actor.ID]++
+	}
+	c.lastOOMEventsLookup = collectedAt
+	return cloneOOMEvents(c.oomEventsByID), nil
 }
 
 func aggregateProjects(containers []model.ContainerSnapshot) []model.ProjectSnapshot {
@@ -206,4 +262,144 @@ func memoryUsageBytes(stats dockerapi.ContainerMemory) uint64 {
 		return usage
 	}
 	return usage - cache
+}
+
+func detailedSnapshot(summary dockerapi.ContainerSummary, stats dockerapi.ContainerStats) model.ContainerDetailedSnapshot {
+	return model.ContainerDetailedSnapshot{
+		StatsRead: stats.Read,
+		CPU: model.ContainerCPUSnapshot{
+			UsageSecondsTotal:        nanosecondsToSeconds(stats.CPUStats.CPUUsage.TotalUsage),
+			UserSecondsTotal:         nanosecondsToSeconds(stats.CPUStats.CPUUsage.UsageInUsermode),
+			SystemSecondsTotal:       nanosecondsToSeconds(stats.CPUStats.CPUUsage.UsageInKernelmode),
+			CFSPeriodsTotal:          stats.CPUStats.ThrottlingData.Periods,
+			CFSThrottledPeriodsTotal: stats.CPUStats.ThrottlingData.ThrottledPeriods,
+			CFSThrottledSecondsTotal: nanosecondsToSeconds(stats.CPUStats.ThrottlingData.ThrottledTime),
+		},
+		Memory: model.ContainerMemoryDetailedSnapshot{
+			UsageBytes:      stats.MemoryStats.Usage,
+			WorkingSetBytes: memoryUsageBytes(stats.MemoryStats),
+			LimitBytes:      stats.MemoryStats.Limit,
+			MaxUsageBytes:   stats.MemoryStats.MaxUsage,
+			RSSBytes:        firstUint64(stats.MemoryStats.Stats, "rss", "total_rss"),
+			CacheBytes:      firstUint64(stats.MemoryStats.Stats, "cache", "total_cache", "inactive_file", "total_inactive_file"),
+			SwapBytes:       firstUint64(stats.MemoryStats.Stats, "swap", "total_swap"),
+			FailCount:       stats.MemoryStats.Failcnt,
+		},
+		Network: model.ContainerNetworkDetailedSnapshot{
+			Interfaces: networkInterfaces(stats.Networks),
+		},
+		BlockIO: model.ContainerBlockIOSnapshot{
+			ReadBytesTotal:          sumBlkio(stats.BlkioStats.IoServiceBytesRecursive, "read"),
+			WriteBytesTotal:         sumBlkio(stats.BlkioStats.IoServiceBytesRecursive, "write"),
+			ReadOperationsTotal:     sumBlkio(stats.BlkioStats.IoServicedRecursive, "read"),
+			WriteOperationsTotal:    sumBlkio(stats.BlkioStats.IoServicedRecursive, "write"),
+			IOTimeSecondsTotal:      blkioValuesToSeconds(stats.BlkioStats.IoTimeRecursive),
+			WaitTimeSecondsTotal:    blkioValuesToSeconds(stats.BlkioStats.IoWaitTimeRecursive),
+			ServiceTimeSecondsTotal: blkioValuesToSeconds(stats.BlkioStats.IoServiceTimeRecursive),
+		},
+		Filesystem: model.ContainerFilesystemSnapshot{
+			WritableLayerBytes:   clampToUint64(summary.SizeRW),
+			WritableLayerPresent: summary.SizeRW >= 0,
+			RootFSBytes:          clampToUint64(summary.SizeRootFS),
+			RootFSPresent:        summary.SizeRootFS >= 0,
+		},
+		PIDsCurrent: stats.PIDsStats.Current,
+	}
+}
+
+func applyInspectDetails(snapshot *model.ContainerDetailedSnapshot, inspect dockerapi.ContainerInspect) {
+	snapshot.CPU.QuotaMicroseconds = inspect.HostConfig.CPUQuota
+	snapshot.CPU.PeriodMicroseconds = inspect.HostConfig.CPUPeriod
+	snapshot.CPU.Shares = inspect.HostConfig.CPUShares
+	snapshot.StartedAt = inspect.State.StartedAt
+	if inspect.HostConfig.Memory > 0 {
+		snapshot.Memory.LimitBytes = uint64(inspect.HostConfig.Memory)
+	}
+	if inspect.HostConfig.MemorySwap > 0 {
+		snapshot.Memory.SwapLimitBytes = uint64(inspect.HostConfig.MemorySwap)
+	}
+	snapshot.OOMKilled = inspect.State.OOMKilled
+	if inspect.State.Health != nil {
+		snapshot.HealthStatus = inspect.State.Health.Status
+	}
+	snapshot.InspectFound = true
+}
+
+func networkInterfaces(networks map[string]dockerapi.ContainerNetwork) []model.ContainerNetworkInterfaceSnapshot {
+	if len(networks) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	result := make([]model.ContainerNetworkInterfaceSnapshot, 0, len(names))
+	for _, name := range names {
+		network := networks[name]
+		result = append(result, model.ContainerNetworkInterfaceSnapshot{
+			Name:           name,
+			RxBytesTotal:   network.RxBytes,
+			TxBytesTotal:   network.TxBytes,
+			RxPacketsTotal: network.RxPackets,
+			TxPacketsTotal: network.TxPackets,
+			RxErrorsTotal:  network.RxErrors,
+			TxErrorsTotal:  network.TxErrors,
+			RxDroppedTotal: network.RxDropped,
+			TxDroppedTotal: network.TxDropped,
+		})
+	}
+	return result
+}
+
+func sumBlkio(entries []dockerapi.ContainerBlkioStatEntry, op string) uint64 {
+	var total uint64
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Op), op) {
+			total += entry.Value
+		}
+	}
+	return total
+}
+
+func blkioValuesToSeconds(entries []dockerapi.ContainerBlkioStatEntry) float64 {
+	var total uint64
+	for _, entry := range entries {
+		total += entry.Value
+	}
+	return nanosecondsToSeconds(total)
+}
+
+func firstUint64(values map[string]uint64, keys ...string) uint64 {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			return value
+		}
+	}
+	return 0
+}
+
+func clampToUint64(value int64) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value)
+}
+
+func nanosecondsToSeconds(value uint64) float64 {
+	return float64(value) / float64(time.Second)
+}
+
+func cloneOOMEvents(values map[string]uint64) map[string]uint64 {
+	if len(values) == 0 {
+		return nil
+	}
+
+	result := make(map[string]uint64, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
 }

@@ -22,6 +22,79 @@ type ContainerSnapshot struct {
 	MemoryLimitBytes uint64
 	Running          bool
 	StatsCollected   bool
+	Detailed         *ContainerDetailedSnapshot
+}
+
+type ContainerDetailedSnapshot struct {
+	StatsRead    time.Time
+	StartedAt    time.Time
+	CPU          ContainerCPUSnapshot
+	Memory       ContainerMemoryDetailedSnapshot
+	Network      ContainerNetworkDetailedSnapshot
+	BlockIO      ContainerBlockIOSnapshot
+	Filesystem   ContainerFilesystemSnapshot
+	PIDsCurrent  uint64
+	OOMEvents    uint64
+	OOMKilled    bool
+	HealthStatus string
+	InspectFound bool
+}
+
+type ContainerCPUSnapshot struct {
+	UsageSecondsTotal        float64
+	UserSecondsTotal         float64
+	SystemSecondsTotal       float64
+	CFSPeriodsTotal          uint64
+	CFSThrottledPeriodsTotal uint64
+	CFSThrottledSecondsTotal float64
+	QuotaMicroseconds        int64
+	PeriodMicroseconds       int64
+	Shares                   int64
+}
+
+type ContainerMemoryDetailedSnapshot struct {
+	UsageBytes      uint64
+	WorkingSetBytes uint64
+	LimitBytes      uint64
+	SwapLimitBytes  uint64
+	MaxUsageBytes   uint64
+	RSSBytes        uint64
+	CacheBytes      uint64
+	SwapBytes       uint64
+	FailCount       uint64
+}
+
+type ContainerNetworkDetailedSnapshot struct {
+	Interfaces []ContainerNetworkInterfaceSnapshot
+}
+
+type ContainerNetworkInterfaceSnapshot struct {
+	Name           string
+	RxBytesTotal   uint64
+	TxBytesTotal   uint64
+	RxPacketsTotal uint64
+	TxPacketsTotal uint64
+	RxErrorsTotal  uint64
+	TxErrorsTotal  uint64
+	RxDroppedTotal uint64
+	TxDroppedTotal uint64
+}
+
+type ContainerBlockIOSnapshot struct {
+	ReadBytesTotal          uint64
+	WriteBytesTotal         uint64
+	ReadOperationsTotal     uint64
+	WriteOperationsTotal    uint64
+	IOTimeSecondsTotal      float64
+	WaitTimeSecondsTotal    float64
+	ServiceTimeSecondsTotal float64
+}
+
+type ContainerFilesystemSnapshot struct {
+	WritableLayerBytes   uint64
+	WritableLayerPresent bool
+	RootFSBytes          uint64
+	RootFSPresent        bool
 }
 
 type ProjectSnapshot struct {

@@ -10,15 +10,46 @@ import (
 )
 
 type Metrics struct {
-	containerCPU         *prometheus.GaugeVec
-	containerMemory      *prometheus.GaugeVec
-	containerMemoryLimit *prometheus.GaugeVec
-	containerRunning     *prometheus.GaugeVec
-	containerStatsOK     *prometheus.GaugeVec
-	projectCPU           *prometheus.GaugeVec
-	projectMemory        *prometheus.GaugeVec
-	projectTotal         *prometheus.GaugeVec
-	projectRunning       *prometheus.GaugeVec
+	containerCPU                    *prometheus.GaugeVec
+	containerMemory                 *prometheus.GaugeVec
+	containerMemoryLimit            *prometheus.GaugeVec
+	containerRunning                *prometheus.GaugeVec
+	containerStatsOK                *prometheus.GaugeVec
+	containerCPUSeconds             *prometheus.GaugeVec
+	containerCPUUserSeconds         *prometheus.GaugeVec
+	containerCPUSystemSeconds       *prometheus.GaugeVec
+	containerCPUCFSPeriods          *prometheus.GaugeVec
+	containerCPUCFSThrottledPeriods *prometheus.GaugeVec
+	containerCPUCFSThrottledSeconds *prometheus.GaugeVec
+	containerSpecCPUQuota           *prometheus.GaugeVec
+	containerSpecCPUPeriod          *prometheus.GaugeVec
+	containerSpecCPUShares          *prometheus.GaugeVec
+	containerMemoryRaw              *prometheus.GaugeVec
+	containerMemoryWorkingSet       *prometheus.GaugeVec
+	containerMemoryMaxUsage         *prometheus.GaugeVec
+	containerMemoryRSS              *prometheus.GaugeVec
+	containerMemoryCache            *prometheus.GaugeVec
+	containerMemorySwap             *prometheus.GaugeVec
+	containerMemoryFailCount        *prometheus.GaugeVec
+	containerSpecMemoryLimit        *prometheus.GaugeVec
+	containerSpecMemorySwapLimit    *prometheus.GaugeVec
+	containerOOMKilled              *prometheus.GaugeVec
+	containerOOMEvents              *prometheus.GaugeVec
+	containerStartTime              *prometheus.GaugeVec
+	containerHealth                 *prometheus.GaugeVec
+	containerPIDsCurrent            *prometheus.GaugeVec
+	containerNetworkBytes           *prometheus.GaugeVec
+	containerNetworkPackets         *prometheus.GaugeVec
+	containerNetworkErrors          *prometheus.GaugeVec
+	containerNetworkDrops           *prometheus.GaugeVec
+	containerBlockIOBytes           *prometheus.GaugeVec
+	containerBlockIOOperations      *prometheus.GaugeVec
+	containerBlockIOTime            *prometheus.GaugeVec
+	containerFilesystemSize         *prometheus.GaugeVec
+	projectCPU                      *prometheus.GaugeVec
+	projectMemory                   *prometheus.GaugeVec
+	projectTotal                    *prometheus.GaugeVec
+	projectRunning                  *prometheus.GaugeVec
 
 	hostInfo               *prometheus.GaugeVec
 	hostCPU                *prometheus.GaugeVec
@@ -86,7 +117,7 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "ugos_exporter_container_memory_usage_bytes",
-			Help: "Memory usage by container in bytes.",
+			Help: "Effective working-set style memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "ugos_exporter_container_memory_limit_bytes",
@@ -100,6 +131,130 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 			Name: "ugos_exporter_container_stats_collected",
 			Help: "Whether container stats were collected successfully (1) or not (0).",
 		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_usage_seconds_total",
+			Help: "Total CPU time consumed by the container in seconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUUserSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_user_seconds_total",
+			Help: "User-mode CPU time consumed by the container in seconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUSystemSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_system_seconds_total",
+			Help: "Kernel-mode CPU time consumed by the container in seconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUCFSPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_cfs_periods_total",
+			Help: "Completely elapsed CFS periods for the container.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUCFSThrottledPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_cfs_throttled_periods_total",
+			Help: "CFS periods in which the container was throttled.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerCPUCFSThrottledSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_cpu_cfs_throttled_seconds_total",
+			Help: "Total throttled CFS time for the container in seconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerSpecCPUQuota: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_spec_cpu_quota",
+			Help: "Configured CPU CFS quota for the container in microseconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerSpecCPUPeriod: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_spec_cpu_period",
+			Help: "Configured CPU CFS period for the container in microseconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerSpecCPUShares: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_spec_cpu_shares",
+			Help: "Configured CPU shares for the container.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryRaw: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_usage_raw_bytes",
+			Help: "Raw memory usage reported by Docker for the container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryWorkingSet: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_working_set_bytes",
+			Help: "Working-set memory usage by container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryMaxUsage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_max_usage_bytes",
+			Help: "Peak memory usage reported for the container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryRSS: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_rss_bytes",
+			Help: "RSS memory usage by container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryCache: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_cache_bytes",
+			Help: "Page cache memory usage by container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemorySwap: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_swap_bytes",
+			Help: "Swap memory usage by container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerMemoryFailCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_memory_fail_count",
+			Help: "Memory allocation failures reported for the container.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerSpecMemoryLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_spec_memory_limit_bytes",
+			Help: "Configured memory limit for the container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerSpecMemorySwapLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_spec_memory_swap_limit_bytes",
+			Help: "Configured swap-inclusive memory limit for the container in bytes.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerOOMKilled: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_oom_killed",
+			Help: "Whether Docker reports the container as OOM-killed.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerOOMEvents: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_oom_events_total",
+			Help: "Count of Docker OOM events observed for the container since exporter start.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerStartTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_start_time_seconds",
+			Help: "Container start time since Unix epoch in seconds.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerHealth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_health_status",
+			Help: "Container health status as a labeled info-style gauge.",
+		}, []string{"container_id", "container", "project", "image", "state", "health"}),
+		containerPIDsCurrent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_pids_current",
+			Help: "Current PID count inside the container.",
+		}, []string{"container_id", "container", "project", "image", "state"}),
+		containerNetworkBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_network_bytes_total",
+			Help: "Container network byte counters by interface and direction.",
+		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
+		containerNetworkPackets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_network_packets_total",
+			Help: "Container network packet counters by interface and direction.",
+		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
+		containerNetworkErrors: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_network_errors_total",
+			Help: "Container network error counters by interface and direction.",
+		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
+		containerNetworkDrops: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_network_dropped_total",
+			Help: "Container network dropped packet counters by interface and direction.",
+		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
+		containerBlockIOBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_blkio_bytes_total",
+			Help: "Container block I/O byte counters by operation.",
+		}, []string{"container_id", "container", "project", "image", "state", "operation"}),
+		containerBlockIOOperations: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_blkio_operations_total",
+			Help: "Container block I/O operation counters by operation.",
+		}, []string{"container_id", "container", "project", "image", "state", "operation"}),
+		containerBlockIOTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_blkio_time_seconds_total",
+			Help: "Container block I/O time counters in seconds by type.",
+		}, []string{"container_id", "container", "project", "image", "state", "type"}),
+		containerFilesystemSize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_exporter_container_filesystem_size_bytes",
+			Help: "Container filesystem sizes in bytes by type.",
+		}, []string{"container_id", "container", "project", "image", "state", "type"}),
 		projectCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "ugos_exporter_project_cpu_usage_percent",
 			Help: "Aggregated CPU usage percentage by project.",
@@ -346,6 +501,37 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 		m.containerMemoryLimit,
 		m.containerRunning,
 		m.containerStatsOK,
+		m.containerCPUSeconds,
+		m.containerCPUUserSeconds,
+		m.containerCPUSystemSeconds,
+		m.containerCPUCFSPeriods,
+		m.containerCPUCFSThrottledPeriods,
+		m.containerCPUCFSThrottledSeconds,
+		m.containerSpecCPUQuota,
+		m.containerSpecCPUPeriod,
+		m.containerSpecCPUShares,
+		m.containerMemoryRaw,
+		m.containerMemoryWorkingSet,
+		m.containerMemoryMaxUsage,
+		m.containerMemoryRSS,
+		m.containerMemoryCache,
+		m.containerMemorySwap,
+		m.containerMemoryFailCount,
+		m.containerSpecMemoryLimit,
+		m.containerSpecMemorySwapLimit,
+		m.containerOOMKilled,
+		m.containerOOMEvents,
+		m.containerStartTime,
+		m.containerHealth,
+		m.containerPIDsCurrent,
+		m.containerNetworkBytes,
+		m.containerNetworkPackets,
+		m.containerNetworkErrors,
+		m.containerNetworkDrops,
+		m.containerBlockIOBytes,
+		m.containerBlockIOOperations,
+		m.containerBlockIOTime,
+		m.containerFilesystemSize,
 		m.projectCPU,
 		m.projectMemory,
 		m.projectTotal,
@@ -417,6 +603,37 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 	m.containerMemoryLimit.Reset()
 	m.containerRunning.Reset()
 	m.containerStatsOK.Reset()
+	m.containerCPUSeconds.Reset()
+	m.containerCPUUserSeconds.Reset()
+	m.containerCPUSystemSeconds.Reset()
+	m.containerCPUCFSPeriods.Reset()
+	m.containerCPUCFSThrottledPeriods.Reset()
+	m.containerCPUCFSThrottledSeconds.Reset()
+	m.containerSpecCPUQuota.Reset()
+	m.containerSpecCPUPeriod.Reset()
+	m.containerSpecCPUShares.Reset()
+	m.containerMemoryRaw.Reset()
+	m.containerMemoryWorkingSet.Reset()
+	m.containerMemoryMaxUsage.Reset()
+	m.containerMemoryRSS.Reset()
+	m.containerMemoryCache.Reset()
+	m.containerMemorySwap.Reset()
+	m.containerMemoryFailCount.Reset()
+	m.containerSpecMemoryLimit.Reset()
+	m.containerSpecMemorySwapLimit.Reset()
+	m.containerOOMKilled.Reset()
+	m.containerOOMEvents.Reset()
+	m.containerStartTime.Reset()
+	m.containerHealth.Reset()
+	m.containerPIDsCurrent.Reset()
+	m.containerNetworkBytes.Reset()
+	m.containerNetworkPackets.Reset()
+	m.containerNetworkErrors.Reset()
+	m.containerNetworkDrops.Reset()
+	m.containerBlockIOBytes.Reset()
+	m.containerBlockIOOperations.Reset()
+	m.containerBlockIOTime.Reset()
+	m.containerFilesystemSize.Reset()
 	m.projectCPU.Reset()
 	m.projectMemory.Reset()
 	m.projectTotal.Reset()
@@ -487,13 +704,73 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 	}
 
 	for _, container := range snapshot.Containers {
-		labels := []string{container.ID, container.Name, container.Project, container.Image, container.State}
+		labels := containerLabelValues(container)
 		m.containerRunning.WithLabelValues(labels...).Set(boolToFloat(container.Running))
 		m.containerStatsOK.WithLabelValues(labels...).Set(boolToFloat(container.StatsCollected))
 		if container.StatsCollected {
 			m.containerCPU.WithLabelValues(labels...).Set(container.CPUPercent)
 			m.containerMemory.WithLabelValues(labels...).Set(float64(container.MemoryUsageBytes))
 			m.containerMemoryLimit.WithLabelValues(labels...).Set(float64(container.MemoryLimitBytes))
+		}
+		if container.Detailed == nil {
+			continue
+		}
+
+		detailed := container.Detailed
+		m.containerCPUSeconds.WithLabelValues(labels...).Set(detailed.CPU.UsageSecondsTotal)
+		m.containerCPUUserSeconds.WithLabelValues(labels...).Set(detailed.CPU.UserSecondsTotal)
+		m.containerCPUSystemSeconds.WithLabelValues(labels...).Set(detailed.CPU.SystemSecondsTotal)
+		m.containerCPUCFSPeriods.WithLabelValues(labels...).Set(float64(detailed.CPU.CFSPeriodsTotal))
+		m.containerCPUCFSThrottledPeriods.WithLabelValues(labels...).Set(float64(detailed.CPU.CFSThrottledPeriodsTotal))
+		m.containerCPUCFSThrottledSeconds.WithLabelValues(labels...).Set(detailed.CPU.CFSThrottledSecondsTotal)
+		m.containerMemoryRaw.WithLabelValues(labels...).Set(float64(detailed.Memory.UsageBytes))
+		m.containerMemoryWorkingSet.WithLabelValues(labels...).Set(float64(detailed.Memory.WorkingSetBytes))
+		m.containerMemoryMaxUsage.WithLabelValues(labels...).Set(float64(detailed.Memory.MaxUsageBytes))
+		m.containerMemoryRSS.WithLabelValues(labels...).Set(float64(detailed.Memory.RSSBytes))
+		m.containerMemoryCache.WithLabelValues(labels...).Set(float64(detailed.Memory.CacheBytes))
+		m.containerMemorySwap.WithLabelValues(labels...).Set(float64(detailed.Memory.SwapBytes))
+		m.containerMemoryFailCount.WithLabelValues(labels...).Set(float64(detailed.Memory.FailCount))
+		m.containerOOMEvents.WithLabelValues(labels...).Set(float64(detailed.OOMEvents))
+		m.containerPIDsCurrent.WithLabelValues(labels...).Set(float64(detailed.PIDsCurrent))
+		if detailed.InspectFound {
+			m.containerSpecCPUQuota.WithLabelValues(labels...).Set(float64(detailed.CPU.QuotaMicroseconds))
+			m.containerSpecCPUPeriod.WithLabelValues(labels...).Set(float64(detailed.CPU.PeriodMicroseconds))
+			m.containerSpecCPUShares.WithLabelValues(labels...).Set(float64(detailed.CPU.Shares))
+			m.containerSpecMemoryLimit.WithLabelValues(labels...).Set(float64(detailed.Memory.LimitBytes))
+			m.containerSpecMemorySwapLimit.WithLabelValues(labels...).Set(float64(detailed.Memory.SwapLimitBytes))
+			m.containerOOMKilled.WithLabelValues(labels...).Set(boolToFloat(detailed.OOMKilled))
+			if !detailed.StartedAt.IsZero() {
+				m.containerStartTime.WithLabelValues(labels...).Set(float64(detailed.StartedAt.Unix()))
+			}
+			if detailed.HealthStatus != "" {
+				m.containerHealth.WithLabelValues(append(labels, detailed.HealthStatus)...).Set(1)
+			}
+		}
+
+		for _, network := range detailed.Network.Interfaces {
+			m.containerNetworkBytes.WithLabelValues(append(labels, network.Name, "receive")...).Set(float64(network.RxBytesTotal))
+			m.containerNetworkBytes.WithLabelValues(append(labels, network.Name, "transmit")...).Set(float64(network.TxBytesTotal))
+			m.containerNetworkPackets.WithLabelValues(append(labels, network.Name, "receive")...).Set(float64(network.RxPacketsTotal))
+			m.containerNetworkPackets.WithLabelValues(append(labels, network.Name, "transmit")...).Set(float64(network.TxPacketsTotal))
+			m.containerNetworkErrors.WithLabelValues(append(labels, network.Name, "receive")...).Set(float64(network.RxErrorsTotal))
+			m.containerNetworkErrors.WithLabelValues(append(labels, network.Name, "transmit")...).Set(float64(network.TxErrorsTotal))
+			m.containerNetworkDrops.WithLabelValues(append(labels, network.Name, "receive")...).Set(float64(network.RxDroppedTotal))
+			m.containerNetworkDrops.WithLabelValues(append(labels, network.Name, "transmit")...).Set(float64(network.TxDroppedTotal))
+		}
+
+		m.containerBlockIOBytes.WithLabelValues(append(labels, "read")...).Set(float64(detailed.BlockIO.ReadBytesTotal))
+		m.containerBlockIOBytes.WithLabelValues(append(labels, "write")...).Set(float64(detailed.BlockIO.WriteBytesTotal))
+		m.containerBlockIOOperations.WithLabelValues(append(labels, "read")...).Set(float64(detailed.BlockIO.ReadOperationsTotal))
+		m.containerBlockIOOperations.WithLabelValues(append(labels, "write")...).Set(float64(detailed.BlockIO.WriteOperationsTotal))
+		m.containerBlockIOTime.WithLabelValues(append(labels, "io")...).Set(detailed.BlockIO.IOTimeSecondsTotal)
+		m.containerBlockIOTime.WithLabelValues(append(labels, "wait")...).Set(detailed.BlockIO.WaitTimeSecondsTotal)
+		m.containerBlockIOTime.WithLabelValues(append(labels, "service")...).Set(detailed.BlockIO.ServiceTimeSecondsTotal)
+
+		if detailed.Filesystem.WritableLayerPresent {
+			m.containerFilesystemSize.WithLabelValues(append(labels, "writable")...).Set(float64(detailed.Filesystem.WritableLayerBytes))
+		}
+		if detailed.Filesystem.RootFSPresent {
+			m.containerFilesystemSize.WithLabelValues(append(labels, "rootfs")...).Set(float64(detailed.Filesystem.RootFSBytes))
 		}
 	}
 
@@ -685,6 +962,10 @@ func projectLabelValues(project model.ProjectSnapshot) []string {
 		strconv.Itoa(project.RunningContainers),
 		strconv.Itoa(project.TotalContainers),
 	}
+}
+
+func containerLabelValues(container model.ContainerSnapshot) []string {
+	return []string{container.ID, container.Name, container.Project, container.Image, container.State}
 }
 
 func boolToFloat(value bool) float64 {

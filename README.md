@@ -65,6 +65,8 @@ Docker metrics:
 - `ugos_exporter_container_*`
 - `ugos_exporter_project_*`
 
+With `UGOS_EXPORTER_DETAILED_CONTAINER_STATS=true` or `DETAILED_CONTAINER_STATS=true`, the exporter also publishes cAdvisor-style per-container CPU time/throttling/spec metrics, raw memory breakdown metrics, per-interface network counters, block I/O counters, PID counts, OOM event/state metrics, start time/health metadata, and writable/rootfs size metrics.
+
 Host metrics:
 
 - `ugos_exporter_host_cpu_*`
@@ -189,6 +191,7 @@ services:
       UGOS_EXPORTER_DOCKER_HOST: "unix:///var/run/docker.sock"
       UGOS_EXPORTER_LISTEN_ADDRESS: ":9877"
       UGOS_EXPORTER_SCRAPE_INTERVAL: "15s"
+      # UGOS_EXPORTER_DETAILED_CONTAINER_STATS: "true"
       UGOS_EXPORTER_HOST_METRICS_ENABLED: "true"
       UGOS_EXPORTER_HOST_PROCFS: "/host/proc"
       UGOS_EXPORTER_HOST_SYSFS: "/host/sys"
@@ -247,6 +250,7 @@ Flags and env vars:
 - `--project-label`, `UGOS_EXPORTER_PROJECT_LABEL`
 - `--standalone-project-name`, `UGOS_EXPORTER_STANDALONE_PROJECT_NAME`
 - `--container-concurrency`, `UGOS_EXPORTER_CONTAINER_CONCURRENCY`
+- `--detailed-container-stats`, `UGOS_EXPORTER_DETAILED_CONTAINER_STATS`, `DETAILED_CONTAINER_STATS`
 - `--mqtt-broker`, `UGOS_EXPORTER_MQTT_BROKER`
 - `--mqtt-client-id`, `UGOS_EXPORTER_MQTT_CLIENT_ID`
 - `--mqtt-username`, `UGOS_EXPORTER_MQTT_USER`
@@ -257,6 +261,8 @@ Flags and env vars:
 - `--mqtt-retain`, `UGOS_EXPORTER_MQTT_RETAIN`
 - `--mqtt-connect-timeout`, `UGOS_EXPORTER_MQTT_CONNECT_TIMEOUT`
 - `--homeassistant-expire-after`, `UGOS_EXPORTER_MQTT_EXPIRE_AFTER`
+
+`--detailed-container-stats` is disabled by default. When enabled, the exporter performs extra per-container Docker API calls and exposes cAdvisor-style container CPU, memory, network, block I/O, PID, OOM, start time, health, and filesystem size metrics in Prometheus.
 - `--host-metrics-enabled`, `UGOS_EXPORTER_HOST_METRICS_ENABLED`
 - `--host-procfs`, `UGOS_EXPORTER_HOST_PROCFS`
 - `--host-sysfs`, `UGOS_EXPORTER_HOST_SYSFS`

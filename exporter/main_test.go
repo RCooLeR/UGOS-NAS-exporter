@@ -1,9 +1,11 @@
 package main
 
 import (
+	"flag"
 	"testing"
 
 	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	cli "github.com/urfave/cli/v2"
 )
 
 func TestPreferredHostName(t *testing.T) {
@@ -69,4 +71,40 @@ func TestSortProcesses(t *testing.T) {
 	if got[0].Name != "Virtual Machine" || got[2].Name != "Sync & Backup" {
 		t.Fatalf("sortProcesses(memory) order = %q, %q, %q", got[0].Name, got[1].Name, got[2].Name)
 	}
+}
+
+func TestConfigFromCLI_DetailedContainerStats(t *testing.T) {
+	t.Run("defaults to false", func(t *testing.T) {
+		cfg := mustConfigFromArgs(t)
+		if cfg.DetailedContainerStats {
+			t.Fatalf("DetailedContainerStats = true, want false")
+		}
+	})
+
+	t.Run("can be enabled with flag", func(t *testing.T) {
+		cfg := mustConfigFromArgs(t, "--detailed-container-stats")
+		if !cfg.DetailedContainerStats {
+			t.Fatalf("DetailedContainerStats = false, want true")
+		}
+	})
+}
+
+func mustConfigFromArgs(t *testing.T, args ...string) config {
+	t.Helper()
+
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, cliFlag := range buildFlags() {
+		if err := cliFlag.Apply(set); err != nil {
+			t.Fatalf("apply flag: %v", err)
+		}
+	}
+	if err := set.Parse(args); err != nil {
+		t.Fatalf("parse args: %v", err)
+	}
+
+	cfg, err := configFromCLI(cli.NewContext(cli.NewApp(), set, nil))
+	if err != nil {
+		t.Fatalf("configFromCLI() error = %v", err)
+	}
+	return cfg
 }
