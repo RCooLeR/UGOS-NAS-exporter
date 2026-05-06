@@ -285,6 +285,46 @@ func viaDevice(t *testing.T, payload map[string]any) string {
 	return via
 }
 
+func TestVirtualMachineMemoryUsageIgnoresStoppedVMs(t *testing.T) {
+	vms := []model.VirtualMachineSnapshot{
+		{
+			UGOSVMID:         "running-vm",
+			Name:             "Running VM",
+			Running:          true,
+			CPUPercent:       2.5,
+			MemoryBytes:      8 * 1024,
+			MemoryUsageBytes: 3 * 1024,
+			MaxMemoryBytes:   16 * 1024,
+		},
+		{
+			UGOSVMID:         "stopped-vm",
+			Name:             "Stopped VM",
+			State:            "shutoff",
+			Running:          false,
+			CPUPercent:       9,
+			MemoryBytes:      8 * 1024,
+			MemoryUsageBytes: 4 * 1024,
+			MaxMemoryBytes:   16 * 1024,
+		},
+	}
+
+	total, running, _, memory := virtualMachineProjectTotals(vms)
+	if total != 2 || running != 1 {
+		t.Fatalf("unexpected VM totals: total=%d running=%d", total, running)
+	}
+	if memory != 3*1024 {
+		t.Fatalf("expected project memory to include only running VM usage, got %d", memory)
+	}
+
+	stoppedAttrs := virtualMachineContainerAttribute(vms[1])
+	if got := stoppedAttrs["memory_usage_bytes"]; got != uint64(0) {
+		t.Fatalf("expected stopped VM memory_usage_bytes to be 0, got %#v", got)
+	}
+	if got := stoppedAttrs["memory_current_bytes"]; got != uint64(8*1024) {
+		t.Fatalf("expected stopped VM current memory to stay available, got %#v", got)
+	}
+}
+
 func payloadString(payload interface{}) string {
 	switch value := payload.(type) {
 	case string:

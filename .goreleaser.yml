@@ -41,6 +41,7 @@ dockers_v2:
     dockerfile: bridge/Dockerfile.goreleaser
     images:
       - rcooler/ugos-bridge
+      - rcooler/ugos-exporter
     tags:
       - "{{ .Version }}"
       - "{{ if and (not .IsSnapshot) (not .Prerelease) }}latest{{ end }}"

@@ -1181,6 +1181,9 @@ func virtualMachineProjectTotals(vms []model.VirtualMachineSnapshot) (total int,
 }
 
 func vmMemoryUsageBytes(vm model.VirtualMachineSnapshot) uint64 {
+	if !vm.Running {
+		return 0
+	}
 	if vm.MemoryUsageBytes > 0 {
 		return vm.MemoryUsageBytes
 	}

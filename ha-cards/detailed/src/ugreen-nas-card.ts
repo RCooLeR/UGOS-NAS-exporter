@@ -540,8 +540,11 @@ export class UgreenNasCard extends LitElement {
         ${activeProject.containers.map((container) => {
           const logo = this.resolveProjectLogo(activeProject.key);
           const isVM = activeProject.key === 'virtual_machines';
+          const vmAssignedMemoryBytes =
+            container.memoryCurrentBytes !== undefined && container.memoryCurrentBytes > 0 ? container.memoryCurrentBytes : undefined;
+          const memoryCapacityBytes = isVM ? vmAssignedMemoryBytes ?? container.memoryLimitBytes : container.memoryLimitBytes;
           const memoryBarWidth = clamp(
-            ((container.memoryBytes ?? 0) / Math.max(container.memoryLimitBytes ?? container.memoryBytes ?? 1, 1)) * 100,
+            ((container.memoryBytes ?? 0) / Math.max(memoryCapacityBytes ?? container.memoryBytes ?? 1, 1)) * 100,
             4,
             100
           );
@@ -568,12 +571,12 @@ export class UgreenNasCard extends LitElement {
                   <strong>${formatProjectPercent(container.cpuPercent)}</strong>
                 </div>
                 <div class="detail-metric-card">
-                  <span>RAM</span>
+                  <span>${isVM ? 'Used RAM' : 'RAM'}</span>
                   <strong>${formatBytes(container.memoryBytes, 0)}</strong>
                 </div>
                 <div class="detail-metric-card">
-                  <span>${isVM ? 'Max RAM' : 'Limit'}</span>
-                  <strong>${container.memoryLimitBytes ? formatBytes(container.memoryLimitBytes, 0) : 'N/A'}</strong>
+                  <span>${isVM && vmAssignedMemoryBytes !== undefined ? 'Assigned RAM' : isVM ? 'Max RAM' : 'Limit'}</span>
+                  <strong>${memoryCapacityBytes ? formatBytes(memoryCapacityBytes, 0) : 'N/A'}</strong>
                 </div>
                 <div class="detail-metric-card">
                   <span>Status</span>

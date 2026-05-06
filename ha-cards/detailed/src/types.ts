@@ -188,6 +188,7 @@ export interface DockerContainer {
   running: boolean;
   cpuPercent: number;
   memoryBytes: number;
+  memoryCurrentBytes?: number;
   memoryLimitBytes?: number;
 }
 

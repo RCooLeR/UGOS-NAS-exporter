@@ -1044,6 +1044,9 @@ func containerLabelValues(container model.ContainerSnapshot) []string {
 }
 
 func vmMemoryUsageBytes(vm model.VirtualMachineSnapshot) uint64 {
+	if !vm.Running {
+		return 0
+	}
 	if vm.MemoryUsageBytes > 0 {
 		return vm.MemoryUsageBytes
 	}

@@ -25,6 +25,10 @@ const STORAGE_POOL_ACCENTS = [THEME_COLORS.green, THEME_COLORS.cyan, THEME_COLOR
 const hostCpuRegex = /^sensor\.ugos_bridge_host_(.+?)_cpu_usage_percent$/;
 const projectCpuRegex = /^sensor\.ugos_bridge_project_(.+?)_cpu_usage_percent$/;
 const legacyHostCpuRegex = /^sensor\.([a-z0-9_]+)_\1_cpu(?:_|$)/;
+const bridgeHostChildRegex =
+  /^(?:sensor|binary_sensor)\.ugos_bridge_host_(.+?)_(?:array|bond|disk|filesystem|gpu|network)_/;
+const haNamedHostChildRegex =
+  /^(?:sensor|binary_sensor)\.([a-z0-9_]+)_(?:array|bond|disk|filesystem|gpu|network)_[a-z0-9][a-z0-9_]*_[a-z0-9_]+(?:_\d+)?$/;
 const containerEntityRegex =
   /^(?:sensor|binary_sensor)\.ugos_bridge_container_(.+?)_(cpu_usage_percent|memory_usage_bytes|running)$/;
 const processEntityRegex =
@@ -162,7 +166,7 @@ const getEntriesByPrefixes = (
 const firstExistingEntityId = (
   states: Record<string, HassEntityLike>,
   entityIds: string[]
-): string | undefined => entityIds.find((entityId) => states[entityId] !== undefined);
+): string | undefined => entityIds.find((entityId) => isUsableEntityState(states[entityId]));
 
 const getPayloadNamedEntries = (
   states: Record<string, HassEntityLike>,
@@ -601,16 +605,24 @@ const buildDrive = (
   diskSlug: string
 ): DriveInfo | null => {
   const capacityBytes = getNumberState(states, resolveDiskMetricEntityId(states, hostSlug, diskSlug, 'size'));
-  if (capacityBytes === undefined) {
-    return null;
-  }
-
   const temperatureCelsius = getNumberState(states, resolveDiskMetricEntityId(states, hostSlug, diskSlug, 'temperature'));
   const readBytesPerSecond = getNumberState(states, resolveDiskMetricEntityId(states, hostSlug, diskSlug, 'read'));
   const writeBytesPerSecond = getNumberState(states, resolveDiskMetricEntityId(states, hostSlug, diskSlug, 'write'));
   const busyPercent = getNumberState(states, resolveDiskMetricEntityId(states, hostSlug, diskSlug, 'busy'));
   const diskModel = getTextState(states, resolveDiskTextMetricEntityId(states, hostSlug, diskSlug, 'model'));
   const mediaType = normalizeDiskMediaType(getTextState(states, resolveDiskTextMetricEntityId(states, hostSlug, diskSlug, 'type')));
+  if (
+    capacityBytes === undefined &&
+    temperatureCelsius === undefined &&
+    readBytesPerSecond === undefined &&
+    writeBytesPerSecond === undefined &&
+    busyPercent === undefined &&
+    diskModel === undefined &&
+    mediaType === undefined
+  ) {
+    return null;
+  }
+
   const cleanModel = normalizeDiskModel(diskModel);
   const fallbackName =
     cleanupFriendlyName(
@@ -625,7 +637,7 @@ const buildDrive = (
         ? `${cleanModel ?? fallbackName} ${diskSlug.toUpperCase()}`
         : cleanModel ?? fallbackName,
     model: mediaType ? mediaType.toUpperCase() : temperatureCelsius !== undefined ? 'Physical Disk' : 'Disk',
-    capacityBytes,
+    capacityBytes: capacityBytes ?? 0,
     temperatureCelsius,
     readBytesPerSecond,
     writeBytesPerSecond,
@@ -695,6 +707,8 @@ const buildProject = (states: Record<string, HassEntityLike>, projectSlug: strin
   if (cpuPercent === undefined || memoryBytes === undefined || totalContainers === undefined || runningContainers === undefined) {
     return null;
   }
+  const containers = normalizeProjectContainers(projectSlug, collectProjectContainers(states, projectSlug, projectEntityId ?? cpuEntityId));
+  const effectiveMemoryBytes = resolveProjectMemoryBytes(projectSlug, memoryBytes, containers);
 
   return {
     key: projectSlug,
@@ -709,12 +723,38 @@ const buildProject = (states: Record<string, HassEntityLike>, projectSlug: strin
           .join(' ')
     ),
     cpuPercent,
-    memoryBytes,
+    memoryBytes: effectiveMemoryBytes,
     runningContainers: Math.round(runningContainers),
     totalContainers: Math.round(totalContainers),
     status: runningContainers <= 0 ? 'down' : runningContainers < totalContainers ? 'partial' : 'up',
-    containers: collectProjectContainers(states, projectSlug, projectEntityId ?? cpuEntityId)
+    containers
   };
+};
+
+const normalizeProjectContainers = (projectSlug: string, containers: DockerContainer[]): DockerContainer[] => {
+  if (projectSlug !== 'virtual_machines') {
+    return containers;
+  }
+
+  return containers.map((container) =>
+    container.running
+      ? container
+      : {
+          ...container,
+          memoryBytes: 0
+        }
+  );
+};
+
+const resolveProjectMemoryBytes = (projectSlug: string, memoryBytes: number, containers: DockerContainer[]): number => {
+  if (projectSlug !== 'virtual_machines') {
+    return memoryBytes;
+  }
+  if (containers.length === 0) {
+    return memoryBytes;
+  }
+
+  return containers.reduce((total, container) => total + (container.running ? container.memoryBytes : 0), 0);
 };
 
 const collectProjectContainers = (
@@ -757,6 +797,7 @@ const collectProjectContainers = (
       status !== undefined ||
       state !== undefined ||
       running !== undefined ||
+      getNumberAttribute(entity, 'memory_current_bytes') !== undefined ||
       getNumberAttribute(entity, 'memory_limit_bytes') !== undefined ||
       containerEntityRegex.test(entityId);
     if (!hasContainerPayload) {
@@ -778,6 +819,7 @@ const collectProjectContainers = (
     container.image = container.image ?? image ?? 'Unknown';
     container.status = container.status ?? status ?? 'Unavailable';
     container.state = container.state ?? state ?? inferContainerState(entity);
+    container.memoryCurrentBytes = container.memoryCurrentBytes ?? getNumberAttribute(entity, 'memory_current_bytes');
     container.memoryLimitBytes = container.memoryLimitBytes ?? getNumberAttribute(entity, 'memory_limit_bytes');
     container.cpuPercent = getNumberAttribute(entity, 'cpu_usage_percent') ?? container.cpuPercent ?? 0;
     container.memoryBytes = getNumberAttribute(entity, 'memory_usage_bytes') ?? container.memoryBytes ?? 0;
@@ -797,6 +839,7 @@ const collectProjectContainers = (
       running: container.running ?? false,
       cpuPercent: container.cpuPercent ?? 0,
       memoryBytes: container.memoryBytes ?? 0,
+      memoryCurrentBytes: container.memoryCurrentBytes,
       memoryLimitBytes: container.memoryLimitBytes
     }))
     .sort(
@@ -834,6 +877,7 @@ const parseProjectContainerAttribute = (
       readString(item, ['state', 'State'])?.toLowerCase() === 'running',
     cpuPercent: readNumber(item, ['cpu_usage_percent', 'cpuPercent', 'CPUUsagePercent', 'CPUPercent']) ?? 0,
     memoryBytes: readNumber(item, ['memory_usage_bytes', 'memoryBytes', 'MemoryUsageBytes', 'MemoryBytes']) ?? 0,
+    memoryCurrentBytes: readNumber(item, ['memory_current_bytes', 'memoryCurrentBytes', 'MemoryCurrentBytes']),
     memoryLimitBytes: readNumber(item, ['memory_limit_bytes', 'memoryLimitBytes', 'MemoryLimitBytes'])
   };
 };
@@ -1023,19 +1067,19 @@ const buildNetworkInterface = (
   const txEntityId = resolveNetworkMetricEntityId(states, hostSlug, networkSlug, 'tx');
   const rxBytesPerSecond = getNumberState(states, rxEntityId);
   const txBytesPerSecond = getNumberState(states, txEntityId);
-  if (rxBytesPerSecond === undefined || txBytesPerSecond === undefined) {
+  const linkSpeedMbps = getNumberState(states, resolveNetworkMetricEntityId(states, hostSlug, networkSlug, 'speed'));
+  const carrierEntityId = resolveNetworkCarrierEntityId(states, hostSlug, networkSlug);
+  if (rxBytesPerSecond === undefined && txBytesPerSecond === undefined && linkSpeedMbps === undefined && !carrierEntityId) {
     return null;
   }
 
-  const linkSpeedMbps = getNumberState(states, resolveNetworkMetricEntityId(states, hostSlug, networkSlug, 'speed'));
-
   return {
     name: normalizeInterfaceName(networkSlug),
-    status: isBinaryOn(states[resolveNetworkCarrierEntityId(states, hostSlug, networkSlug) ?? '']) ? 'up' : 'down',
+    status: isBinaryOn(states[carrierEntityId ?? '']) ? 'up' : 'down',
     linkSpeedMbps: linkSpeedMbps ?? undefined,
     temperatureCelsius: pickInterfaceTemperature(temperatures, networkSlug),
-    downloadBps: rxBytesPerSecond * 8,
-    uploadBps: txBytesPerSecond * 8
+    downloadBps: (rxBytesPerSecond ?? 0) * 8,
+    uploadBps: (txBytesPerSecond ?? 0) * 8
   };
 };
 
@@ -1097,16 +1141,16 @@ const collectArrays = (states: Record<string, HassEntityLike>, hostSlug: string)
   for (const arraySlug of arraySlugs) {
     const sizeEntityId = resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'size');
     const sizeBytes = getNumberState(states, sizeEntityId);
-    if (sizeBytes === undefined) {
-      continue;
-    }
-
     const degradedDisks = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'degraded')) ?? 0;
     const activeDisks = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'active'));
     const totalDisks = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'total'));
     const syncPercent = getNumberState(states, resolveArrayMetricEntityId(states, hostSlug, arraySlug, 'sync'));
     const levelEntityId = resolveArrayTextMetricEntityId(states, hostSlug, arraySlug, 'level');
     const level = getTextState(states, levelEntityId);
+    if (sizeBytes === undefined && activeDisks === undefined && totalDisks === undefined && syncPercent === undefined && level === undefined) {
+      continue;
+    }
+
     const members = getFirstStringArrayAttribute(
       [
         states[sizeEntityId ?? ''],
@@ -1120,8 +1164,11 @@ const collectArrays = (states: Record<string, HassEntityLike>, hostSlug: string)
 
     arrays.push({
       slug: arraySlug,
-      name: cleanupFriendlyName(states[sizeEntityId ?? ''], 'Size', '') ?? arraySlug.toUpperCase(),
-      sizeBytes,
+      name:
+        cleanupFriendlyName(states[sizeEntityId ?? ''], 'Size', '') ??
+        cleanupFriendlyName(states[levelEntityId ?? ''], 'Level', '') ??
+        arraySlug.toUpperCase(),
+      sizeBytes: sizeBytes ?? 0,
       degradedDisks: Math.round(degradedDisks),
       activeDisks: activeDisks !== undefined ? Math.round(activeDisks) : undefined,
       totalDisks: totalDisks !== undefined ? Math.round(totalDisks) : undefined,
@@ -1170,29 +1217,14 @@ const resolveHostSlug = (states: Record<string, HassEntityLike>, configuredHost:
   return getComputedResult(states, `hostSlug:${configuredHost ?? ''}`, () => {
     if (configuredHost) {
       const preferredSlug = slugify(configuredHost);
-      if (hasEntityPrefix(states, preferredSlug)) {
+      if (hasEntityPrefix(states, preferredSlug) || hasBridgeHostEntityPrefix(states, preferredSlug)) {
         return preferredSlug;
       }
     }
 
-    const hostSlugs = Array.from(
-      new Set(
-        getStateKeys(states)
-          .map((entityId) => hostCpuRegex.exec(entityId)?.[1])
-          .filter((slug): slug is string => Boolean(slug))
-      )
-    ).sort();
-
+    const hostSlugs = collectHostSlugCandidates(states);
     if (hostSlugs.length === 0) {
-      const legacySlugs = Array.from(
-        new Set(
-          getStateKeys(states)
-            .map((entityId) => legacyHostCpuRegex.exec(entityId)?.[1])
-            .filter((slug): slug is string => Boolean(slug))
-        )
-      ).sort();
-
-      return legacySlugs[0] ?? null;
+      return null;
     }
 
     if (!configuredHost) {
@@ -1285,7 +1317,13 @@ const collectDiskSlugs = (states: Record<string, HassEntityLike>, hostSlug: stri
   return getComputedResult(states, `diskSlugs:${hostSlug}:${hostPrefix}`, () => {
     const exactSlugs = [
       ...collectEntitySlugs(states, new RegExp(`^sensor\\.${escapeRegExp(hostPrefix)}_disk_(.+?)_size_bytes$`)),
-      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_disk_(.+?)_size_bytes$/)
+      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_disk_(.+?)_size_bytes$/),
+      ...collectEntitySlugs(
+        states,
+        new RegExp(
+          `^sensor\\.${escapeRegExp(hostPrefix)}_disk_(.+?)_(?:size_bytes|read_bytes_per_second|write_bytes_per_second|busy_percent|model|vendor|serial|media_type)(?:_\\d+)?$`
+        )
+      )
     ];
     const legacySlugs = getStateKeys(states)
       .map((entityId) => entityId.match(new RegExp(`^sensor\\.${escapeRegExp(hostSlug)}_disk_([^_]+)_`))?.[1])
@@ -1311,7 +1349,13 @@ const collectFilesystemSlugs = (states: Record<string, HassEntityLike>, hostSlug
   return getComputedResult(states, `filesystemSlugs:${hostSlug}`, () => {
     const exactSlugs = [
       ...collectEntitySlugs(states, new RegExp(`^sensor\\.ugos_bridge_host_${escapeRegExp(hostSlug)}_filesystem_(.+?)_used_bytes$`)),
-      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_filesystem_(.+?)_used_bytes$/)
+      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_filesystem_(.+?)_used_bytes$/),
+      ...collectEntitySlugs(
+        states,
+        new RegExp(
+          `^(?:sensor|binary_sensor)\\.ugos_bridge_host_${escapeRegExp(hostSlug)}_filesystem_(.+?)_(?:used_bytes|free_bytes|used_percent|read_only)(?:_\\d+)?$`
+        )
+      )
     ];
     const legacySlugs = getStateKeys(states)
       .map((entityId) => entityId.match(new RegExp(`^sensor\\.${escapeRegExp(hostSlug)}_filesystem_([^_]+)_`))?.[1])
@@ -1332,7 +1376,13 @@ const collectNetworkSlugs = (states: Record<string, HassEntityLike>, hostSlug: s
   return getComputedResult(states, `networkSlugs:${hostSlug}:${hostPrefix}`, () => {
     const exactSlugs = [
       ...collectEntitySlugs(states, new RegExp(`^sensor\\.${escapeRegExp(hostPrefix)}_network_(.+?)_rx_bytes_per_second$`)),
-      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_network_(.+?)_rx_bytes_per_second$/)
+      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_network_(.+?)_rx_bytes_per_second$/),
+      ...collectEntitySlugs(
+        states,
+        new RegExp(
+          `^(?:sensor|binary_sensor)\\.${escapeRegExp(hostPrefix)}_network_(.+?)_(?:rx_bytes_per_second|tx_bytes_per_second|speed_mbps|carrier)(?:_\\d+)?$`
+        )
+      )
     ];
     const legacySlugs = getStateKeys(states)
       .map((entityId) => entityId.match(new RegExp(`^sensor\\.${escapeRegExp(hostSlug)}_network_([^_]+)_`))?.[1])
@@ -1358,7 +1408,13 @@ const collectBondSlugs = (states: Record<string, HassEntityLike>, hostSlug: stri
   return getComputedResult(states, `bondSlugs:${hostSlug}:${hostPrefix}`, () => {
     const exactSlugs = [
       ...collectEntitySlugs(states, new RegExp(`^sensor\\.${escapeRegExp(hostPrefix)}_bond_(.+?)_speed_mbps$`)),
-      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_bond_(.+?)_speed_mbps$/)
+      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_bond_(.+?)_speed_mbps$/),
+      ...collectEntitySlugs(
+        states,
+        new RegExp(
+          `^(?:sensor|binary_sensor)\\.${escapeRegExp(hostPrefix)}_bond_(.+?)_(?:speed_mbps|mode|active_slave|mii_status|slave_count|carrier)(?:_\\d+)?$`
+        )
+      )
     ];
     const legacySlugs = getStateKeys(states)
       .map((entityId) => entityId.match(new RegExp(`^sensor\\.${escapeRegExp(hostSlug)}_bond_([^_]+)_`))?.[1])
@@ -1448,7 +1504,13 @@ const collectArraySlugs = (states: Record<string, HassEntityLike>, hostSlug: str
   return getComputedResult(states, `arraySlugs:${hostSlug}`, () => {
     const exactSlugs = [
       ...collectEntitySlugs(states, new RegExp(`^sensor\\.ugos_bridge_host_${escapeRegExp(hostSlug)}_array_(.+?)_size_bytes$`)),
-      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_array_(.+?)_size_bytes$/)
+      ...collectEntitySlugs(states, /^sensor\.ugos_bridge_array_(.+?)_size_bytes$/),
+      ...collectEntitySlugs(
+        states,
+        new RegExp(
+          `^(?:sensor|binary_sensor)\\.ugos_bridge_host_${escapeRegExp(hostSlug)}_array_(.+?)_(?:size_bytes|degraded_disks|active_disks|total_disks|sync_completed_percent|level|degraded)(?:_\\d+)?$`
+        )
+      )
     ];
     const legacySlugs = getStateKeys(states)
       .map((entityId) => entityId.match(new RegExp(`^sensor\\.${escapeRegExp(hostSlug)}_array_([^_]+)_`))?.[1])
@@ -1548,7 +1610,11 @@ const resolveDiskMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_disk_${diskSlug}_`, `sensor.ugos_bridge_disk_${diskSlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_disk_${diskSlug}_`,
+      `sensor.${hostSlug}_disk_${diskSlug}_`,
+      `sensor.ugos_bridge_disk_${diskSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     const matcher =
       metric === 'size'
@@ -1597,7 +1663,11 @@ const resolveDiskTextMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_disk_${diskSlug}_`, `sensor.ugos_bridge_disk_${diskSlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_disk_${diskSlug}_`,
+      `sensor.${hostSlug}_disk_${diskSlug}_`,
+      `sensor.ugos_bridge_disk_${diskSlug}_`
+    ];
     const matcher =
       metric === 'type'
         ? { entityIncludes: ['media'], friendlyIncludes: ['media'] }
@@ -1642,7 +1712,11 @@ const resolveFilesystemMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_filesystem_${filesystemSlug}_`, `sensor.ugos_bridge_filesystem_${filesystemSlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_filesystem_${filesystemSlug}_`,
+      `sensor.${hostSlug}_filesystem_${filesystemSlug}_`,
+      `sensor.ugos_bridge_filesystem_${filesystemSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     if (prefixedEntries.length > 0) {
       return findBestMetricEntityId(prefixedEntries, { entityIncludes: [metric], friendlyIncludes: [metric], unit: 'B' });
@@ -1674,7 +1748,11 @@ const resolveFilesystemReadonlyEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`binary_sensor.${hostSlug}_filesystem_${filesystemSlug}_`, `binary_sensor.ugos_bridge_filesystem_${filesystemSlug}_`];
+    const prefixes = [
+      `binary_sensor.ugos_bridge_host_${hostSlug}_filesystem_${filesystemSlug}_`,
+      `binary_sensor.${hostSlug}_filesystem_${filesystemSlug}_`,
+      `binary_sensor.ugos_bridge_filesystem_${filesystemSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     if (prefixedEntries.length > 0) {
       return findBestMetricEntityId(prefixedEntries, { entityIncludes: ['read'], friendlyIncludes: ['read', 'only'] });
@@ -1721,7 +1799,11 @@ const resolveArrayMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_array_${arraySlug}_`, `sensor.ugos_bridge_array_${arraySlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_array_${arraySlug}_`,
+      `sensor.${hostSlug}_array_${arraySlug}_`,
+      `sensor.ugos_bridge_array_${arraySlug}_`
+    ];
     const matcher =
       metric === 'size'
         ? { entityIncludes: ['size'], friendlyIncludes: ['size'], unit: 'B' }
@@ -1765,7 +1847,11 @@ const resolveArrayTextMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_array_${arraySlug}_`, `sensor.ugos_bridge_array_${arraySlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_array_${arraySlug}_`,
+      `sensor.${hostSlug}_array_${arraySlug}_`,
+      `sensor.ugos_bridge_array_${arraySlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     if (prefixedEntries.length > 0) {
       return findBestMetricEntityId(prefixedEntries, { entityIncludes: ['level'], friendlyIncludes: ['level'] });
@@ -1810,7 +1896,11 @@ const resolveNetworkMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_network_${networkSlug}_`, `sensor.ugos_bridge_network_${networkSlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_network_${networkSlug}_`,
+      `sensor.${hostSlug}_network_${networkSlug}_`,
+      `sensor.ugos_bridge_network_${networkSlug}_`
+    ];
     const matcher =
       metric === 'speed'
         ? { entityIncludes: ['speed'], friendlyIncludes: ['link', 'speed'], unit: 'Mbit/s' }
@@ -1850,7 +1940,11 @@ const resolveNetworkCarrierEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`binary_sensor.${hostSlug}_network_${networkSlug}_`, `binary_sensor.ugos_bridge_network_${networkSlug}_`];
+    const prefixes = [
+      `binary_sensor.ugos_bridge_host_${hostSlug}_network_${networkSlug}_`,
+      `binary_sensor.${hostSlug}_network_${networkSlug}_`,
+      `binary_sensor.ugos_bridge_network_${networkSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     if (prefixedEntries.length > 0) {
       return findBestMetricEntityId(prefixedEntries, { entityIncludes: ['carrier'], friendlyIncludes: ['carrier'] });
@@ -1889,7 +1983,11 @@ const resolveBondMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_bond_${bondSlug}_`, `sensor.ugos_bridge_bond_${bondSlug}_`];
+    const prefixes = [
+      `sensor.ugos_bridge_host_${hostSlug}_bond_${bondSlug}_`,
+      `sensor.${hostSlug}_bond_${bondSlug}_`,
+      `sensor.ugos_bridge_bond_${bondSlug}_`
+    ];
     const matcher =
       metric === 'speed'
         ? { entityIncludes: ['speed'], friendlyIncludes: ['link', 'speed'], unit: 'Mbit/s' }
@@ -1927,7 +2025,11 @@ const resolveBondCarrierEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`binary_sensor.${hostSlug}_bond_${bondSlug}_`, `binary_sensor.ugos_bridge_bond_${bondSlug}_`];
+    const prefixes = [
+      `binary_sensor.ugos_bridge_host_${hostSlug}_bond_${bondSlug}_`,
+      `binary_sensor.${hostSlug}_bond_${bondSlug}_`,
+      `binary_sensor.ugos_bridge_bond_${bondSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     if (prefixedEntries.length > 0) {
       return findBestMetricEntityId(prefixedEntries, { entityIncludes: ['carrier'], friendlyIncludes: ['carrier'] });
@@ -1964,7 +2066,11 @@ const resolveGpuMetricEntityId = (
       return exactEntityId;
     }
 
-    const prefixes = [`sensor.${hostSlug}_gpu_${gpuSlug}_`, `sensor.ugos_bridge_gpu_${gpuSlug}_`];
+    const prefixes = [
+      `sensor.${hostPrefix}_gpu_${gpuSlug}_`,
+      `sensor.${hostSlug}_gpu_${gpuSlug}_`,
+      `sensor.ugos_bridge_gpu_${gpuSlug}_`
+    ];
     const prefixedEntries = getEntriesByPrefixes(states, prefixes);
     const matcher =
       metric === 'busy'
@@ -2168,6 +2274,37 @@ const hasEntityPrefix = (states: Record<string, HassEntityLike>, slug: string): 
     getStateKeys(states).some((entityId) => entityId.startsWith(`sensor.${slug}_`) || entityId.startsWith(`binary_sensor.${slug}_`))
   );
 
+const hasBridgeHostEntityPrefix = (states: Record<string, HassEntityLike>, slug: string): boolean =>
+  getComputedResult(states, `hasBridgeHostEntityPrefix:${slug}`, () =>
+    getStateKeys(states).some(
+      (entityId) =>
+        entityId.startsWith(`sensor.ugos_bridge_host_${slug}_`) ||
+        entityId.startsWith(`binary_sensor.ugos_bridge_host_${slug}_`)
+    )
+  );
+
+const collectHostSlugCandidates = (states: Record<string, HassEntityLike>): string[] =>
+  getComputedResult(states, 'hostSlugCandidates', () => {
+    const scores = new Map<string, number>();
+    const addCandidate = (slug: string | undefined, score: number): void => {
+      if (slug === undefined || slug.startsWith('ugos_bridge_')) {
+        return;
+      }
+      scores.set(slug, (scores.get(slug) ?? 0) + score);
+    };
+
+    for (const entityId of getStateKeys(states)) {
+      addCandidate(hostCpuRegex.exec(entityId)?.[1], 1000);
+      addCandidate(bridgeHostChildRegex.exec(entityId)?.[1], 500);
+      addCandidate(legacyHostCpuRegex.exec(entityId)?.[1], 100);
+      addCandidate(haNamedHostChildRegex.exec(entityId)?.[1], 1);
+    }
+
+    return Array.from(scores.entries())
+      .sort(([leftSlug, leftScore], [rightSlug, rightScore]) => rightScore - leftScore || leftSlug.localeCompare(rightSlug))
+      .map(([slug]) => slug);
+  });
+
 const buildWatchPrefixes = (hostSlug: string): string[] => [
   `sensor.ugos_bridge_host_${hostSlug}_`,
   `binary_sensor.ugos_bridge_host_${hostSlug}_`,
@@ -2238,12 +2375,13 @@ const findBestEntityId = (
     const entityText = entityId.toLowerCase();
     const friendlyText = getFriendlyNameLower(entity);
     const unit = getUnit(entity);
+    const isUsable = isUsableEntityState(entity);
 
     if (options.unit && unit !== options.unit) {
       continue;
     }
 
-    let score = 0;
+    let score = isUsable ? 100 : -100;
     for (const token of options.entityIncludes) {
       if (!entityText.includes(token)) {
         continue entryLoop;
@@ -2280,6 +2418,9 @@ const collectEntitySlugs = (states: Record<string, HassEntityLike>, matcher: Reg
       )
     ).sort()
   );
+
+const isUsableEntityState = (entity: HassEntityLike | undefined): boolean =>
+  entity !== undefined && entity.state !== 'unknown' && entity.state !== 'unavailable';
 
 const getNumberState = (states: Record<string, HassEntityLike>, entityId: string | undefined): number | undefined =>
   entityId ? getParsedNumber(states[entityId]) : undefined;
