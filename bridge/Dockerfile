@@ -18,43 +18,43 @@ COPY . .
 ENV GO111MODULE=on
 
 # Download deps
-RUN if [ -f /app/exporter/go.mod ]; then \
-        cd /app/exporter; \
+RUN if [ -f /app/bridge/go.mod ]; then \
+        cd /app/bridge; \
     elif [ -f /app/go.mod ]; then \
         cd /app; \
     else \
-        echo "go.mod not found in /app or /app/exporter" >&2; \
+        echo "go.mod not found in /app or /app/bridge" >&2; \
         exit 1; \
     fi \
     && go mod download
 
-RUN if [ -f /app/exporter/go.mod ]; then \
-        cd /app/exporter; \
+RUN if [ -f /app/bridge/go.mod ]; then \
+        cd /app/bridge; \
     elif [ -f /app/go.mod ]; then \
         cd /app; \
     else \
-        echo "go.mod not found in /app or /app/exporter" >&2; \
+        echo "go.mod not found in /app or /app/bridge" >&2; \
         exit 1; \
     fi \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath \
         -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-        -o /ugos-exporter .
+        -o /ugos-bridge .
 
 FROM debian:bookworm-slim
 
 ARG TARGETARCH
 
 RUN apt-get update \
-    && packages="ca-certificates" \
+    && packages="ca-certificates libvirt-clients" \
     && if [ "$TARGETARCH" = "amd64" ]; then packages="$packages intel-gpu-tools"; fi \
     && apt-get install --no-install-recommends -y $packages \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /ugos-exporter /usr/local/bin/ugos-exporter
+COPY --from=builder /ugos-bridge /usr/local/bin/ugos-bridge
 
 EXPOSE 9877
 
-ENTRYPOINT ["/usr/local/bin/ugos-exporter"]
+ENTRYPOINT ["/usr/local/bin/ugos-bridge"]
 

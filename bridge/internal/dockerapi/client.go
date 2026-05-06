@@ -268,7 +268,7 @@ func buildHTTPClient(endpoint string, timeout time.Duration) (*http.Client, *url
 	case "http", "https":
 		return &http.Client{Timeout: timeout}, parsed, nil
 	case "npipe":
-		return nil, nil, fmt.Errorf("docker host %q uses npipe, which is not supported by this exporter; use tcp:// or run it on a unix socket host", endpoint)
+		return nil, nil, fmt.Errorf("docker host %q uses npipe, which is not supported by this bridge; use tcp:// or run it on a unix socket host", endpoint)
 	default:
 		return nil, nil, fmt.Errorf("unsupported docker host scheme %q", parsed.Scheme)
 	}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type FilesystemMount struct {
@@ -27,6 +27,11 @@ type Config struct {
 	IntelGPUTopPath    string
 	IntelGPUTopDevice  string
 	IntelGPUTopPeriod  time.Duration
+	VMsEnabled         bool
+	VirshPath          string
+	VirshURI           string
+	VirshTimeout       time.Duration
+	VMNameOverrides    map[string]string
 }
 
 type Collector struct{}

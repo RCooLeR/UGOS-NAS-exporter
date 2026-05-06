@@ -8,7 +8,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type publishedMessage struct {
@@ -80,8 +80,8 @@ func TestPublishSnapshotClearsDiscoveryWithoutClearingState(t *testing.T) {
 		},
 		discoveredEntities: map[string]publishedEntity{
 			"process:python:cpu": {
-				discoveryTopic: "homeassistant/sensor/ugos_exporter_process_python/cpu_usage_percent/config",
-				stateTopic:     "ugos_exporter/host/processes/python/state",
+				discoveryTopic: "homeassistant/sensor/ugos_bridge_process_python/cpu_usage_percent/config",
+				stateTopic:     "ugos_bridge/host/processes/python/state",
 			},
 		},
 	}
@@ -95,7 +95,7 @@ func TestPublishSnapshotClearsDiscoveryWithoutClearingState(t *testing.T) {
 	}
 
 	msg := client.publishes[0]
-	if msg.topic != "homeassistant/sensor/ugos_exporter_process_python/cpu_usage_percent/config" {
+	if msg.topic != "homeassistant/sensor/ugos_bridge_process_python/cpu_usage_percent/config" {
 		t.Fatalf("unexpected discovery topic: %s", msg.topic)
 	}
 	if msg.payload != "" {
@@ -107,8 +107,8 @@ func TestHealthSensorsUseUniqueEntityIDsPerSensor(t *testing.T) {
 	client := &recordingClient{}
 	publisher := &MQTTPublisher{
 		client:             client,
-		cfg:                MQTTConfig{TopicPrefix: "ugos_exporter", DiscoveryPrefix: "homeassistant"},
-		availabilityTopic:  "ugos_exporter/status",
+		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},
+		availabilityTopic:  "ugos_bridge/status",
 		discoveredEntities: map[string]publishedEntity{},
 	}
 
@@ -142,8 +142,8 @@ func TestBondSlaveEntitiesDoNotReuseNetworkEntityIDs(t *testing.T) {
 	client := &recordingClient{}
 	publisher := &MQTTPublisher{
 		client:             client,
-		cfg:                MQTTConfig{TopicPrefix: "ugos_exporter", DiscoveryPrefix: "homeassistant"},
-		availabilityTopic:  "ugos_exporter/status",
+		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},
+		availabilityTopic:  "ugos_bridge/status",
 		discoveredEntities: map[string]publishedEntity{},
 	}
 
@@ -184,6 +184,61 @@ func TestBondSlaveEntitiesDoNotReuseNetworkEntityIDs(t *testing.T) {
 	}
 }
 
+func TestChildDeviceDiscoveryPublishesParentsFirst(t *testing.T) {
+	client := &recordingClient{}
+	publisher := &MQTTPublisher{
+		client:             client,
+		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},
+		availabilityTopic:  "ugos_bridge/status",
+		discoveredEntities: map[string]publishedEntity{},
+	}
+
+	snapshot := model.Snapshot{
+		CollectedAt: time.Date(2026, 4, 27, 23, 30, 0, 0, time.UTC),
+		Host: &model.HostSnapshot{
+			Name: "dxp6800_pro",
+			Filesystems: []model.FilesystemSnapshot{
+				{Name: "/volume1", Array: "md0", UsedBytes: 40, FreeBytes: 60, TotalBytes: 100},
+			},
+			Arrays: []model.ArraySnapshot{
+				{Name: "md0", Level: "raid1", State: "clean", SizeBytes: 100, DisksActive: 2, DisksTotal: 2},
+			},
+			Networks: []model.NetworkSnapshot{
+				{Name: "eth0", Master: "bond0", Carrier: true, SpeedMbps: 1000},
+			},
+			Bonds: []model.BondSnapshot{
+				{Name: "bond0", Carrier: true, SpeedMbps: 1000},
+			},
+		},
+	}
+
+	if err := publisher.publishHost(snapshot, map[string]publishedEntity{}); err != nil {
+		t.Fatalf("publishHost returned error: %v", err)
+	}
+
+	arrayTopic := publisher.discoveryTopic("sensor", "array_md0", "size_bytes")
+	filesystemTopic := publisher.discoveryTopic("sensor", "filesystem_volume1", "used_bytes")
+	if arrayIndex, filesystemIndex := publishIndex(t, client, arrayTopic), publishIndex(t, client, filesystemTopic); arrayIndex > filesystemIndex {
+		t.Fatalf("array discovery published after filesystem discovery: array=%d filesystem=%d", arrayIndex, filesystemIndex)
+	}
+
+	bondTopic := publisher.discoveryTopic("sensor", "bond_bond0", "speed_mbps")
+	networkTopic := publisher.discoveryTopic("sensor", "network_eth0", "speed_mbps")
+	if bondIndex, networkIndex := publishIndex(t, client, bondTopic), publishIndex(t, client, networkTopic); bondIndex > networkIndex {
+		t.Fatalf("bond discovery published after network discovery: bond=%d network=%d", bondIndex, networkIndex)
+	}
+
+	filesystem := configPayload(t, client, filesystemTopic)
+	if viaDevice(t, filesystem) != "ugos_bridge_host_dxp6800_pro_array_md0" {
+		t.Fatalf("filesystem via_device = %q, want array parent", viaDevice(t, filesystem))
+	}
+
+	network := configPayload(t, client, networkTopic)
+	if viaDevice(t, network) != "ugos_bridge_host_dxp6800_pro_bond_bond0" {
+		t.Fatalf("network via_device = %q, want bond parent", viaDevice(t, network))
+	}
+}
+
 func configPayload(t *testing.T, client *recordingClient, topic string) map[string]any {
 	t.Helper()
 
@@ -201,6 +256,33 @@ func configPayload(t *testing.T, client *recordingClient, topic string) map[stri
 
 	t.Fatalf("topic %s was not published", topic)
 	return nil
+}
+
+func publishIndex(t *testing.T, client *recordingClient, topic string) int {
+	t.Helper()
+
+	for index, msg := range client.publishes {
+		if msg.topic == topic {
+			return index
+		}
+	}
+
+	t.Fatalf("topic %s was not published", topic)
+	return -1
+}
+
+func viaDevice(t *testing.T, payload map[string]any) string {
+	t.Helper()
+
+	device, ok := payload["device"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has no device map: %#v", payload["device"])
+	}
+	via, ok := device["via_device"].(string)
+	if !ok {
+		t.Fatalf("payload has no via_device string: %#v", device["via_device"])
+	}
+	return via
 }
 
 func payloadString(payload interface{}) string {

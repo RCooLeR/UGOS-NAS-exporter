@@ -1,8 +1,8 @@
 # UGREEN NAS Detailed Card
 
-Large Home Assistant Lovelace card for `ugos-exporter` NAS telemetry.
+Large Home Assistant Lovelace card for `ugos-bridge` NAS telemetry.
 
-It reads live Home Assistant entities created by the exporter's MQTT discovery and only falls back to preview data when Home Assistant state is unavailable.
+It reads live Home Assistant entities created by the bridge's MQTT discovery and only falls back to preview data when Home Assistant state is unavailable.
 
 ## Project Layout
 
@@ -66,7 +66,7 @@ networkInterfaces:
 ## Config
 
 - `title` - card title
-- `host` - exporter host name or slug
+- `host` - bridge host name or slug
 - `deviceModel` - display override for NAS model
 - `ugosVersion` - display override for UGOS version
 - `ipAddress` - fixed IP text override

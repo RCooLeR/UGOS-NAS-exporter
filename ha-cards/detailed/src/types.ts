@@ -40,6 +40,7 @@ export type KnownDockerProjectKey =
   | 'monitoring'
   | 'nas'
   | 'torrent'
+  | 'virtual_machines'
   | 'webserver';
 export type DockerProjectKey = KnownDockerProjectKey | (string & {});
 

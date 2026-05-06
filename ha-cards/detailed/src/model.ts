@@ -184,15 +184,59 @@ const dockerProjects: DockerProject[] = [
         memoryLimitBytes: gib(1)
       },
       {
-        key: 'ugos-exporter',
-        name: 'ugos-exporter',
-        image: 'rcooler/ugos-exporter:latest',
+        key: 'ugos-bridge',
+        name: 'ugos-bridge',
+        image: 'rcooler/ugos-bridge:latest',
         status: 'Up 14 days',
         state: 'running',
         running: true,
         cpuPercent: 0.01,
         memoryBytes: 116 * 1024 ** 2,
         memoryLimitBytes: gib(1)
+      }
+    ]
+  },
+  {
+    key: 'virtual_machines',
+    title: 'Virtual machines',
+    cpuPercent: 3.4,
+    memoryBytes: gib(5.8),
+    runningContainers: 2,
+    totalContainers: 3,
+    status: 'partial',
+    containers: [
+      {
+        key: 'ugos-vm-win11',
+        name: 'Windows 11',
+        image: 'Win11_24H2_English_x64',
+        status: 'Running',
+        state: 'running',
+        running: true,
+        cpuPercent: 2.7,
+        memoryBytes: gib(4.1),
+        memoryLimitBytes: gib(8)
+      },
+      {
+        key: 'ugos-vm-ubuntu',
+        name: 'Ubuntu Server',
+        image: 'ubuntu-24.04.2-live-server-amd64',
+        status: 'Running',
+        state: 'running',
+        running: true,
+        cpuPercent: 0.7,
+        memoryBytes: gib(1.7),
+        memoryLimitBytes: gib(4)
+      },
+      {
+        key: 'ugos-vm-test',
+        name: 'Test Lab',
+        image: 'debian-12.10.0-amd64-netinst',
+        status: 'Shutoff',
+        state: 'shutoff',
+        running: false,
+        cpuPercent: 0,
+        memoryBytes: 0,
+        memoryLimitBytes: gib(2)
       }
     ]
   },

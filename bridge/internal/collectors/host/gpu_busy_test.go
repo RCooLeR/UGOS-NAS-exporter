@@ -3,7 +3,7 @@ package hostcollector
 import (
 	"testing"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 func TestMaxGPUEngineBusyPercent(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/prometheus/procfs"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type processSample struct {

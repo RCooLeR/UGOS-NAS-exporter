@@ -1,6 +1,6 @@
 # UGREEN NAS Mini Card
 
-Compact Home Assistant Lovelace card for `ugos-exporter`.
+Compact Home Assistant Lovelace card for `ugos-bridge`.
 
 The mini card reuses the same live entity mapping as the detailed card and renders a compact status view with CPU, RAM, GPU, system load, storage, and network summary tiles.
 
@@ -63,4 +63,4 @@ networkInterfaces:
 
 - The card is now under `ha-cards/small`.
 - It follows the same host/entity discovery rules as the detailed card.
-- When Home Assistant state exists but exporter entities are missing, it shows `No Data` instead of fake live-looking values.
+- When Home Assistant state exists but bridge entities are missing, it shows `No Data` instead of fake live-looking values.

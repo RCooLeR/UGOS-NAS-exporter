@@ -4,7 +4,7 @@ import (
 	"flag"
 	"testing"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -35,6 +35,20 @@ func TestParseCSV(t *testing.T) {
 		if got[idx] != want[idx] {
 			t.Fatalf("parseCSV()[%d] = %q, want %q", idx, got[idx], want[idx])
 		}
+	}
+}
+
+func TestParseNameOverrides(t *testing.T) {
+	got, err := parseNameOverrides("ugos-id-1:Windows 11, ugos-id-2:Ubuntu Server")
+	if err != nil {
+		t.Fatalf("parseNameOverrides() error = %v", err)
+	}
+	if got["ugos-id-1"] != "Windows 11" || got["ugos-id-2"] != "Ubuntu Server" {
+		t.Fatalf("parseNameOverrides() = %#v", got)
+	}
+
+	if _, err := parseNameOverrides("missing-colon"); err == nil {
+		t.Fatalf("parseNameOverrides() error = nil, want error")
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type Metrics struct {
@@ -103,6 +103,14 @@ type Metrics struct {
 	hostProcessCPU         *prometheus.GaugeVec
 	hostProcessMemory      *prometheus.GaugeVec
 	hostProcessCPUTime     *prometheus.GaugeVec
+	hostVMInfo             *prometheus.GaugeVec
+	hostVMRunning          *prometheus.GaugeVec
+	hostVMVCPUs            *prometheus.GaugeVec
+	hostVMCPU              *prometheus.GaugeVec
+	hostVMCPUTime          *prometheus.GaugeVec
+	hostVMMemory           *prometheus.GaugeVec
+	hostVMBlockBytes       *prometheus.GaugeVec
+	hostVMNetworkBytes     *prometheus.GaugeVec
 
 	up             prometheus.Gauge
 	lastCollection prometheus.Gauge
@@ -112,385 +120,417 @@ type Metrics struct {
 func NewMetrics(registry prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		containerCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_usage_percent",
+			Name: "ugos_bridge_container_cpu_usage_percent",
 			Help: "CPU usage percentage by container.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_usage_bytes",
+			Name: "ugos_bridge_container_memory_usage_bytes",
 			Help: "Effective working-set style memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_limit_bytes",
+			Name: "ugos_bridge_container_memory_limit_bytes",
 			Help: "Configured memory limit by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_running",
+			Name: "ugos_bridge_container_running",
 			Help: "Whether the container is running (1) or not (0).",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerStatsOK: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_stats_collected",
+			Name: "ugos_bridge_container_stats_collected",
 			Help: "Whether container stats were collected successfully (1) or not (0).",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_usage_seconds_total",
+			Name: "ugos_bridge_container_cpu_usage_seconds_total",
 			Help: "Total CPU time consumed by the container in seconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUUserSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_user_seconds_total",
+			Name: "ugos_bridge_container_cpu_user_seconds_total",
 			Help: "User-mode CPU time consumed by the container in seconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUSystemSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_system_seconds_total",
+			Name: "ugos_bridge_container_cpu_system_seconds_total",
 			Help: "Kernel-mode CPU time consumed by the container in seconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUCFSPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_cfs_periods_total",
+			Name: "ugos_bridge_container_cpu_cfs_periods_total",
 			Help: "Completely elapsed CFS periods for the container.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUCFSThrottledPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_cfs_throttled_periods_total",
+			Name: "ugos_bridge_container_cpu_cfs_throttled_periods_total",
 			Help: "CFS periods in which the container was throttled.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerCPUCFSThrottledSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_cpu_cfs_throttled_seconds_total",
+			Name: "ugos_bridge_container_cpu_cfs_throttled_seconds_total",
 			Help: "Total throttled CFS time for the container in seconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerSpecCPUQuota: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_spec_cpu_quota",
+			Name: "ugos_bridge_container_spec_cpu_quota",
 			Help: "Configured CPU CFS quota for the container in microseconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerSpecCPUPeriod: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_spec_cpu_period",
+			Name: "ugos_bridge_container_spec_cpu_period",
 			Help: "Configured CPU CFS period for the container in microseconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerSpecCPUShares: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_spec_cpu_shares",
+			Name: "ugos_bridge_container_spec_cpu_shares",
 			Help: "Configured CPU shares for the container.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryRaw: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_usage_raw_bytes",
+			Name: "ugos_bridge_container_memory_usage_raw_bytes",
 			Help: "Raw memory usage reported by Docker for the container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryWorkingSet: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_working_set_bytes",
+			Name: "ugos_bridge_container_memory_working_set_bytes",
 			Help: "Working-set memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryMaxUsage: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_max_usage_bytes",
+			Name: "ugos_bridge_container_memory_max_usage_bytes",
 			Help: "Peak memory usage reported for the container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryRSS: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_rss_bytes",
+			Name: "ugos_bridge_container_memory_rss_bytes",
 			Help: "RSS memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryCache: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_cache_bytes",
+			Name: "ugos_bridge_container_memory_cache_bytes",
 			Help: "Page cache memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemorySwap: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_swap_bytes",
+			Name: "ugos_bridge_container_memory_swap_bytes",
 			Help: "Swap memory usage by container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerMemoryFailCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_memory_fail_count",
+			Name: "ugos_bridge_container_memory_fail_count",
 			Help: "Memory allocation failures reported for the container.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerSpecMemoryLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_spec_memory_limit_bytes",
+			Name: "ugos_bridge_container_spec_memory_limit_bytes",
 			Help: "Configured memory limit for the container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerSpecMemorySwapLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_spec_memory_swap_limit_bytes",
+			Name: "ugos_bridge_container_spec_memory_swap_limit_bytes",
 			Help: "Configured swap-inclusive memory limit for the container in bytes.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerOOMKilled: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_oom_killed",
+			Name: "ugos_bridge_container_oom_killed",
 			Help: "Whether Docker reports the container as OOM-killed.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerOOMEvents: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_oom_events_total",
-			Help: "Count of Docker OOM events observed for the container since exporter start.",
+			Name: "ugos_bridge_container_oom_events_total",
+			Help: "Count of Docker OOM events observed for the container since bridge start.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerStartTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_start_time_seconds",
+			Name: "ugos_bridge_container_start_time_seconds",
 			Help: "Container start time since Unix epoch in seconds.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerHealth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_health_status",
+			Name: "ugos_bridge_container_health_status",
 			Help: "Container health status as a labeled info-style gauge.",
 		}, []string{"container_id", "container", "project", "image", "state", "health"}),
 		containerPIDsCurrent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_pids_current",
+			Name: "ugos_bridge_container_pids_current",
 			Help: "Current PID count inside the container.",
 		}, []string{"container_id", "container", "project", "image", "state"}),
 		containerNetworkBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_network_bytes_total",
+			Name: "ugos_bridge_container_network_bytes_total",
 			Help: "Container network byte counters by interface and direction.",
 		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
 		containerNetworkPackets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_network_packets_total",
+			Name: "ugos_bridge_container_network_packets_total",
 			Help: "Container network packet counters by interface and direction.",
 		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
 		containerNetworkErrors: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_network_errors_total",
+			Name: "ugos_bridge_container_network_errors_total",
 			Help: "Container network error counters by interface and direction.",
 		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
 		containerNetworkDrops: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_network_dropped_total",
+			Name: "ugos_bridge_container_network_dropped_total",
 			Help: "Container network dropped packet counters by interface and direction.",
 		}, []string{"container_id", "container", "project", "image", "state", "interface", "direction"}),
 		containerBlockIOBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_blkio_bytes_total",
+			Name: "ugos_bridge_container_blkio_bytes_total",
 			Help: "Container block I/O byte counters by operation.",
 		}, []string{"container_id", "container", "project", "image", "state", "operation"}),
 		containerBlockIOOperations: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_blkio_operations_total",
+			Name: "ugos_bridge_container_blkio_operations_total",
 			Help: "Container block I/O operation counters by operation.",
 		}, []string{"container_id", "container", "project", "image", "state", "operation"}),
 		containerBlockIOTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_blkio_time_seconds_total",
+			Name: "ugos_bridge_container_blkio_time_seconds_total",
 			Help: "Container block I/O time counters in seconds by type.",
 		}, []string{"container_id", "container", "project", "image", "state", "type"}),
 		containerFilesystemSize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_filesystem_size_bytes",
+			Name: "ugos_bridge_container_filesystem_size_bytes",
 			Help: "Container filesystem sizes in bytes by type.",
 		}, []string{"container_id", "container", "project", "image", "state", "type"}),
 		projectCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_project_cpu_usage_percent",
+			Name: "ugos_bridge_project_cpu_usage_percent",
 			Help: "Aggregated CPU usage percentage by project.",
 		}, []string{"project", "running", "total"}),
 		projectMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_project_memory_usage_bytes",
+			Name: "ugos_bridge_project_memory_usage_bytes",
 			Help: "Aggregated memory usage by project in bytes.",
 		}, []string{"project", "running", "total"}),
 		projectTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_project_total_containers",
+			Name: "ugos_bridge_project_total_containers",
 			Help: "Total containers in the project.",
 		}, []string{"project", "running", "total"}),
 		projectRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_project_running_containers",
+			Name: "ugos_bridge_project_running_containers",
 			Help: "Running containers in the project.",
 		}, []string{"project", "running", "total"}),
 
 		hostInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_info",
+			Name: "ugos_bridge_host_info",
 			Help: "Static host metadata.",
 		}, []string{"host"}),
 		hostCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cpu_usage_percent",
+			Name: "ugos_bridge_host_cpu_usage_percent",
 			Help: "Overall host CPU usage percent.",
 		}, []string{"host"}),
 		hostCPUCore: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cpu_core_usage_percent",
+			Name: "ugos_bridge_host_cpu_core_usage_percent",
 			Help: "Per-core host CPU usage percent.",
 		}, []string{"host", "cpu"}),
 		hostCPUFrequency: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cpu_frequency_mhz",
+			Name: "ugos_bridge_host_cpu_frequency_mhz",
 			Help: "Host CPU frequency in MHz by core and type.",
 		}, []string{"host", "cpu", "type"}),
 		hostCPUGovernorInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cpu_governor_info",
+			Name: "ugos_bridge_host_cpu_governor_info",
 			Help: "Host CPU governor information by core.",
 		}, []string{"host", "cpu", "governor"}),
 		hostLoad: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_load_average",
+			Name: "ugos_bridge_host_load_average",
 			Help: "Host load average by window.",
 		}, []string{"host", "window"}),
 		hostUptime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_uptime_seconds",
+			Name: "ugos_bridge_host_uptime_seconds",
 			Help: "Host uptime in seconds.",
 		}, []string{"host"}),
 		hostContextSwitches: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_context_switches",
+			Name: "ugos_bridge_host_context_switches",
 			Help: "Host context switch count from /proc/stat.",
 		}, []string{"host"}),
 		hostProcessesRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_processes_running",
+			Name: "ugos_bridge_host_processes_running",
 			Help: "Host processes currently running.",
 		}, []string{"host"}),
 		hostProcessesBlocked: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_processes_blocked",
+			Name: "ugos_bridge_host_processes_blocked",
 			Help: "Host processes currently blocked on I/O.",
 		}, []string{"host"}),
 		hostMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_memory_bytes",
+			Name: "ugos_bridge_host_memory_bytes",
 			Help: "Host memory values in bytes by type.",
 		}, []string{"host", "type"}),
 		hostFilesystemBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_filesystem_bytes",
+			Name: "ugos_bridge_host_filesystem_bytes",
 			Help: "Host filesystem values in bytes by type.",
 		}, []string{"host", "filesystem", "mountpoint", "source", "fstype", "array", "type"}),
 		hostFilesystemInodes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_filesystem_inodes",
+			Name: "ugos_bridge_host_filesystem_inodes",
 			Help: "Host filesystem inode values by type.",
 		}, []string{"host", "filesystem", "mountpoint", "source", "fstype", "array", "type"}),
 		hostFilesystemReadOnly: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_filesystem_readonly",
+			Name: "ugos_bridge_host_filesystem_readonly",
 			Help: "Whether a host filesystem is read-only.",
 		}, []string{"host", "filesystem", "mountpoint", "source", "fstype", "array"}),
 		hostDiskInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_info",
+			Name: "ugos_bridge_host_disk_info",
 			Help: "Static host disk metadata.",
 		}, []string{"host", "disk", "type", "vendor", "model", "serial"}),
 		hostDiskSize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_size_bytes",
+			Name: "ugos_bridge_host_disk_size_bytes",
 			Help: "Host disk size in bytes.",
 		}, []string{"host", "disk", "type"}),
 		hostDiskReadBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_read_bytes_per_second",
+			Name: "ugos_bridge_host_disk_read_bytes_per_second",
 			Help: "Host disk read throughput in bytes per second.",
 		}, []string{"host", "disk", "type"}),
 		hostDiskWriteBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_write_bytes_per_second",
+			Name: "ugos_bridge_host_disk_write_bytes_per_second",
 			Help: "Host disk write throughput in bytes per second.",
 		}, []string{"host", "disk", "type"}),
 		hostDiskReadIOPS: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_read_iops",
+			Name: "ugos_bridge_host_disk_read_iops",
 			Help: "Host disk read IOPS.",
 		}, []string{"host", "disk", "type"}),
 		hostDiskWriteIOPS: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_write_iops",
+			Name: "ugos_bridge_host_disk_write_iops",
 			Help: "Host disk write IOPS.",
 		}, []string{"host", "disk", "type"}),
 		hostDiskBusy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_disk_busy_percent",
+			Name: "ugos_bridge_host_disk_busy_percent",
 			Help: "Host disk busy percentage.",
 		}, []string{"host", "disk", "type"}),
 		hostArraySize: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_array_size_bytes",
+			Name: "ugos_bridge_host_array_size_bytes",
 			Help: "Host md array size in bytes.",
 		}, []string{"host", "array", "level", "state"}),
 		hostArrayDisks: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_array_disks",
+			Name: "ugos_bridge_host_array_disks",
 			Help: "Host md array disk counts by type.",
 		}, []string{"host", "array", "level", "state", "type"}),
 		hostArraySync: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_array_sync_percent",
+			Name: "ugos_bridge_host_array_sync_percent",
 			Help: "Host md array sync completion percentage.",
 		}, []string{"host", "array", "level", "state", "action"}),
 		hostBondInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_info",
+			Name: "ugos_bridge_host_bond_info",
 			Help: "Static host bond metadata.",
 		}, []string{"host", "bond", "mode", "active_slave", "primary", "mii_status", "state"}),
 		hostBondSpeed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_speed_mbps",
+			Name: "ugos_bridge_host_bond_speed_mbps",
 			Help: "Host bond reported link speed in Mbps.",
 		}, []string{"host", "bond"}),
 		hostBondCarrier: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_carrier",
+			Name: "ugos_bridge_host_bond_carrier",
 			Help: "Whether the host bond carrier is up.",
 		}, []string{"host", "bond"}),
 		hostBondSlaves: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_slaves",
+			Name: "ugos_bridge_host_bond_slaves",
 			Help: "Host bond slave counts by type.",
 		}, []string{"host", "bond", "type"}),
 		hostBondSlaveInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_slave_info",
+			Name: "ugos_bridge_host_bond_slave_info",
 			Help: "Static host bond slave metadata.",
 		}, []string{"host", "bond", "slave", "mii_status", "state", "duplex", "active"}),
 		hostBondSlaveSpeed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_slave_speed_mbps",
+			Name: "ugos_bridge_host_bond_slave_speed_mbps",
 			Help: "Host bond slave reported link speed in Mbps.",
 		}, []string{"host", "bond", "slave"}),
 		hostBondSlaveCarrier: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_bond_slave_carrier",
+			Name: "ugos_bridge_host_bond_slave_carrier",
 			Help: "Whether the host bond slave carrier is up.",
 		}, []string{"host", "bond", "slave"}),
 		hostNetworkInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_info",
+			Name: "ugos_bridge_host_network_info",
 			Help: "Static host network interface metadata.",
 		}, []string{"host", "interface", "mac", "state", "duplex"}),
 		hostNetworkSpeed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_speed_mbps",
+			Name: "ugos_bridge_host_network_speed_mbps",
 			Help: "Host network interface reported link speed in Mbps.",
 		}, []string{"host", "interface"}),
 		hostNetworkCarrier: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_carrier",
+			Name: "ugos_bridge_host_network_carrier",
 			Help: "Whether the host network interface carrier is up.",
 		}, []string{"host", "interface"}),
 		hostNetworkBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_bytes",
+			Name: "ugos_bridge_host_network_bytes",
 			Help: "Host network byte counters by direction.",
 		}, []string{"host", "interface", "direction"}),
 		hostNetworkThroughput: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_bytes_per_second",
+			Name: "ugos_bridge_host_network_bytes_per_second",
 			Help: "Host network throughput in bytes per second by direction.",
 		}, []string{"host", "interface", "direction"}),
 		hostNetworkPackets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_packets",
+			Name: "ugos_bridge_host_network_packets",
 			Help: "Host network packet counters by direction.",
 		}, []string{"host", "interface", "direction"}),
 		hostNetworkErrors: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_errors",
+			Name: "ugos_bridge_host_network_errors",
 			Help: "Host network error counters by direction.",
 		}, []string{"host", "interface", "direction"}),
 		hostNetworkDrops: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_network_dropped",
+			Name: "ugos_bridge_host_network_dropped",
 			Help: "Host network dropped packet counters by direction.",
 		}, []string{"host", "interface", "direction"}),
 		hostGPUInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_gpu_info",
+			Name: "ugos_bridge_host_gpu_info",
 			Help: "Static host GPU metadata.",
 		}, []string{"host", "gpu", "driver", "vendor", "device"}),
 		hostGPUBusy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_gpu_busy_percent",
+			Name: "ugos_bridge_host_gpu_busy_percent",
 			Help: "Host GPU busy percentage when exposed by the driver.",
 		}, []string{"host", "gpu", "driver"}),
 		hostGPUFrequency: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_gpu_frequency_mhz",
+			Name: "ugos_bridge_host_gpu_frequency_mhz",
 			Help: "Host GPU frequencies in MHz by type.",
 		}, []string{"host", "gpu", "driver", "type"}),
 		hostGPUEngine: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_gpu_engine_percent",
+			Name: "ugos_bridge_host_gpu_engine_percent",
 			Help: "Host GPU engine utilisation percentages from intel_gpu_top.",
 		}, []string{"host", "gpu", "driver", "engine", "type"}),
 		hostGPUStat: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_gpu_stat",
+			Name: "ugos_bridge_host_gpu_stat",
 			Help: "Host GPU stats from intel_gpu_top by type.",
 		}, []string{"host", "gpu", "driver", "type"}),
 		hostTemperature: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_temperature_celsius",
+			Name: "ugos_bridge_host_temperature_celsius",
 			Help: "Host temperature sensors in degrees Celsius.",
 		}, []string{"host", "sensor", "chip", "label", "source", "device_type", "device"}),
 		hostFanSpeed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_fan_speed_rpm",
+			Name: "ugos_bridge_host_fan_speed_rpm",
 			Help: "Host fan speed sensors in RPM.",
 		}, []string{"host", "sensor", "chip", "label", "source", "device_type", "device"}),
 		hostCoolingState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cooling_device_state",
+			Name: "ugos_bridge_host_cooling_device_state",
 			Help: "Host thermal cooling device state by type.",
 		}, []string{"host", "device", "type", "state"}),
 		hostCoolingPercent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_cooling_device_percent",
+			Name: "ugos_bridge_host_cooling_device_percent",
 			Help: "Host thermal cooling device state normalized to percent when max_state is available.",
 		}, []string{"host", "device", "type"}),
 		hostProcessCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_process_group_count",
+			Name: "ugos_bridge_host_process_group_count",
 			Help: "Number of OS processes in a grouped host software entry. Exported for the top host software groups by CPU usage.",
 		}, []string{"host", "software"}),
 		hostProcessCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_process_group_cpu_usage_percent",
+			Name: "ugos_bridge_host_process_group_cpu_usage_percent",
 			Help: "CPU usage percentage for a grouped host software entry. Exported for the top host software groups by CPU usage.",
 		}, []string{"host", "software"}),
 		hostProcessMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_process_group_memory_bytes",
+			Name: "ugos_bridge_host_process_group_memory_bytes",
 			Help: "Resident memory usage for a grouped host software entry. Exported for the top host software groups by CPU usage.",
 		}, []string{"host", "software"}),
 		hostProcessCPUTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "ugos_exporter_host_process_group_cpu_time_seconds",
+			Name: "ugos_bridge_host_process_group_cpu_time_seconds",
 			Help: "Accumulated CPU time for a grouped host software entry. Exported for the top host software groups by CPU usage.",
 		}, []string{"host", "software"}),
+		hostVMInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_info",
+			Help: "Static virtual machine metadata discovered from libvirt.",
+		}, []string{"host", "ugos_vm_id", "vm", "source_name", "state", "iso_path"}),
+		hostVMRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_running",
+			Help: "Whether the virtual machine is running (1) or not (0).",
+		}, []string{"host", "ugos_vm_id", "vm"}),
+		hostVMVCPUs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_vcpus",
+			Help: "Configured or current virtual CPU count for the virtual machine.",
+		}, []string{"host", "ugos_vm_id", "vm"}),
+		hostVMCPU: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_cpu_usage_percent",
+			Help: "Virtual machine CPU usage percentage based on libvirt cpu.time deltas.",
+		}, []string{"host", "ugos_vm_id", "vm"}),
+		hostVMCPUTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_cpu_time_seconds",
+			Help: "Virtual machine accumulated CPU time in seconds.",
+		}, []string{"host", "ugos_vm_id", "vm"}),
+		hostVMMemory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_memory_bytes",
+			Help: "Virtual machine memory values in bytes by type.",
+		}, []string{"host", "ugos_vm_id", "vm", "type"}),
+		hostVMBlockBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_block_bytes_total",
+			Help: "Virtual machine aggregate block I/O counters by direction.",
+		}, []string{"host", "ugos_vm_id", "vm", "direction"}),
+		hostVMNetworkBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "ugos_bridge_host_vm_network_bytes_total",
+			Help: "Virtual machine aggregate network byte counters by direction.",
+		}, []string{"host", "ugos_vm_id", "vm", "direction"}),
 
 		up: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "ugos_exporter_up",
+			Name: "ugos_bridge_up",
 			Help: "Whether the last collection succeeded.",
 		}),
 		lastCollection: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "ugos_exporter_last_collection_timestamp_seconds",
+			Name: "ugos_bridge_last_collection_timestamp_seconds",
 			Help: "Unix timestamp of the last collection attempt.",
 		}),
 		statsErrors: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "ugos_exporter_container_stats_errors",
+			Name: "ugos_bridge_container_stats_errors",
 			Help: "Number of container stats fetches that failed during the last collection.",
 		}),
 	}
@@ -588,6 +628,14 @@ func NewMetrics(registry prometheus.Registerer) *Metrics {
 		m.hostProcessCPU,
 		m.hostProcessMemory,
 		m.hostProcessCPUTime,
+		m.hostVMInfo,
+		m.hostVMRunning,
+		m.hostVMVCPUs,
+		m.hostVMCPU,
+		m.hostVMCPUTime,
+		m.hostVMMemory,
+		m.hostVMBlockBytes,
+		m.hostVMNetworkBytes,
 		m.up,
 		m.lastCollection,
 		m.statsErrors,
@@ -690,6 +738,14 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 	m.hostProcessCPU.Reset()
 	m.hostProcessMemory.Reset()
 	m.hostProcessCPUTime.Reset()
+	m.hostVMInfo.Reset()
+	m.hostVMRunning.Reset()
+	m.hostVMVCPUs.Reset()
+	m.hostVMCPU.Reset()
+	m.hostVMCPUTime.Reset()
+	m.hostVMMemory.Reset()
+	m.hostVMBlockBytes.Reset()
+	m.hostVMNetworkBytes.Reset()
 
 	if err != nil {
 		m.up.Set(0)
@@ -954,6 +1010,25 @@ func (m *Metrics) Update(snapshot model.Snapshot, err error) {
 		m.hostProcessMemory.WithLabelValues(labels...).Set(float64(process.MemoryBytes))
 		m.hostProcessCPUTime.WithLabelValues(labels...).Set(process.CPUTimeSeconds)
 	}
+
+	for _, vm := range snapshot.Host.VMs {
+		labels := []string{hostName, vm.UGOSVMID, vm.Name}
+		m.hostVMInfo.WithLabelValues(hostName, vm.UGOSVMID, vm.Name, vm.SourceName, vm.State, vm.ISOPath).Set(1)
+		m.hostVMRunning.WithLabelValues(labels...).Set(boolToFloat(vm.Running))
+		m.hostVMVCPUs.WithLabelValues(labels...).Set(float64(vm.VCPUs))
+		m.hostVMCPU.WithLabelValues(labels...).Set(vm.CPUPercent)
+		m.hostVMCPUTime.WithLabelValues(labels...).Set(vm.CPUTimeSeconds)
+		m.hostVMMemory.WithLabelValues(append(labels, "used")...).Set(float64(vmMemoryUsageBytes(vm)))
+		m.hostVMMemory.WithLabelValues(append(labels, "current")...).Set(float64(vm.MemoryBytes))
+		m.hostVMMemory.WithLabelValues(append(labels, "maximum")...).Set(float64(vm.MaxMemoryBytes))
+		m.hostVMMemory.WithLabelValues(append(labels, "available")...).Set(float64(vm.MemoryAvailBytes))
+		m.hostVMMemory.WithLabelValues(append(labels, "unused")...).Set(float64(vm.MemoryUnusedBytes))
+		m.hostVMMemory.WithLabelValues(append(labels, "rss")...).Set(float64(vm.MemoryRSSBytes))
+		m.hostVMBlockBytes.WithLabelValues(append(labels, "read")...).Set(float64(vm.DiskReadBytes))
+		m.hostVMBlockBytes.WithLabelValues(append(labels, "write")...).Set(float64(vm.DiskWriteBytes))
+		m.hostVMNetworkBytes.WithLabelValues(append(labels, "receive")...).Set(float64(vm.NetworkRxBytes))
+		m.hostVMNetworkBytes.WithLabelValues(append(labels, "transmit")...).Set(float64(vm.NetworkTxBytes))
+	}
 }
 
 func projectLabelValues(project model.ProjectSnapshot) []string {
@@ -966,6 +1041,13 @@ func projectLabelValues(project model.ProjectSnapshot) []string {
 
 func containerLabelValues(container model.ContainerSnapshot) []string {
 	return []string{container.ID, container.Name, container.Project, container.Image, container.State}
+}
+
+func vmMemoryUsageBytes(vm model.VirtualMachineSnapshot) uint64 {
+	if vm.MemoryUsageBytes > 0 {
+		return vm.MemoryUsageBytes
+	}
+	return vm.MemoryBytes
 }
 
 func boolToFloat(value bool) float64 {

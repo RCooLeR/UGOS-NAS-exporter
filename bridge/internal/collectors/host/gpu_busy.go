@@ -1,6 +1,6 @@
 package hostcollector
 
-import "github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+import "github.com/RCooLeR/UgosBridge/bridge/internal/model"
 
 func maxGPUEngineBusyPercent(engines []model.GPUEngineSnapshot) (float64, bool) {
 	if len(engines) == 0 {

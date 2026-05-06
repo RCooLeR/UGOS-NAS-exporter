@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Compact Home Assistant card for ugos-exporter NAS metrics",
+  "description": "Compact Home Assistant card for ugos-bridge NAS metrics",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

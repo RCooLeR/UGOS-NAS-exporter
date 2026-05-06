@@ -22,7 +22,7 @@ import (
 	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type FilesystemMount struct {
@@ -42,6 +42,11 @@ type Config struct {
 	IntelGPUTopPath    string
 	IntelGPUTopDevice  string
 	IntelGPUTopPeriod  time.Duration
+	VMsEnabled         bool
+	VirshPath          string
+	VirshURI           string
+	VirshTimeout       time.Duration
+	VMNameOverrides    map[string]string
 }
 
 type Collector struct {
@@ -55,6 +60,7 @@ type Collector struct {
 	lastNet        map[string]procfs.NetDevLine
 	lastDisk       map[string]diskSample
 	lastProc       map[int]processSample
+	lastVM         map[string]vmSample
 }
 
 type cpuSnapshot struct {
@@ -130,6 +136,15 @@ func New(cfg Config) (*Collector, error) {
 	if cfg.IntelGPUTopPeriod <= 0 {
 		cfg.IntelGPUTopPeriod = time.Second
 	}
+	if strings.TrimSpace(cfg.VirshPath) == "" {
+		cfg.VirshPath = "virsh"
+	}
+	if strings.TrimSpace(cfg.VirshURI) == "" {
+		cfg.VirshURI = "qemu:///system"
+	}
+	if cfg.VirshTimeout <= 0 {
+		cfg.VirshTimeout = 3 * time.Second
+	}
 	proc, err := procfs.NewFS(cfg.ProcFS)
 	if err != nil {
 		return nil, fmt.Errorf("open procfs %q: %w", cfg.ProcFS, err)
@@ -151,10 +166,11 @@ func New(cfg Config) (*Collector, error) {
 		lastNet:        map[string]procfs.NetDevLine{},
 		lastDisk:       map[string]diskSample{},
 		lastProc:       map[int]processSample{},
+		lastVM:         map[string]vmSample{},
 	}, nil
 }
 
-func (c *Collector) Collect(_ context.Context) (model.HostSnapshot, error) {
+func (c *Collector) Collect(ctx context.Context) (model.HostSnapshot, error) {
 	now := time.Now()
 
 	stat, err := c.proc.Stat()
@@ -231,6 +247,7 @@ func (c *Collector) Collect(_ context.Context) (model.HostSnapshot, error) {
 	snapshot.Networks = c.collectNetworksLocked(now, netdev)
 	snapshot.Disks = c.collectDisksLocked(now, diskstats)
 	snapshot.Processes = c.collectProcessesLocked(elapsed)
+	snapshot.VMs = c.collectVirtualMachinesLocked(ctx, elapsed)
 	c.lastAt = now
 	c.mu.Unlock()
 

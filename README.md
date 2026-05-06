@@ -1,16 +1,21 @@
-# ugos-exporter
+# ugos-bridge
 
 <p align="center" style="text-align: center">
-    <img src="./ugos-nas-exporter.png" width="70%">
+    <img src="./ugos-nas-bridge.png" width="70%">
 </p>
 
-Lightweight UGOS and Docker metrics exporter for Linux NAS hosts and Docker Compose stacks. It exposes host, filesystem, disk, RAID, network, GPU, and container metrics to Prometheus and MQTT/Home Assistant without the overhead of `cadvisor` plus a full node exporter stack.
+Lightweight UGOS, Docker, and virtual machine metrics bridge for Linux NAS hosts, Docker Compose stacks, and QEMU/libvirt VMs. It exposes host, filesystem, disk, RAID, network, GPU, container, and VM metrics to Prometheus and MQTT/Home Assistant without the overhead of `cadvisor` plus a full node exporter stack.
+
+## Disclaimer
+
+UgosBridge is an unofficial DIY open-source project for compatibility and integration. It is not affiliated with, endorsed by, or sponsored by UGREEN. UGREEN, UGOS, and related product names are trademarks or registered trademarks of their respective owners. They are referenced only to describe compatibility and integration.
 
 ## Why This Exists
 
-UGOS boxes often end up running both NAS workloads and a pile of Docker Compose services. `ugos-exporter` is meant to cover that combined view in one process:
+UGOS boxes often end up running both NAS workloads and a pile of Docker Compose services. `ugos-bridge` is meant to cover that combined view in one process:
 
 - Docker container and project metrics
+- QEMU/libvirt virtual machine metrics
 - NAS host health and storage telemetry
 - Prometheus scraping
 - MQTT + Home Assistant discovery
@@ -23,6 +28,9 @@ UGOS boxes often end up running both NAS workloads and a pile of Docker Compose 
 - Per-project memory usage bytes
 - Total containers per project
 - Running containers per project
+- Per-VM CPU, memory, vCPU count, running state, disk I/O, and network counters from `virsh`
+- VM display names derived from attached ISO/disk image paths, with the UGOS VM app ID retained separately
+- Optional VM name overrides by UGOS VM ID for friendlier Home Assistant cards
 - Host CPU usage, load, uptime, and per-core usage
 - Host CPU frequency and governor data when `cpufreq` is exposed by the kernel
 - Host memory and swap usage
@@ -39,22 +47,23 @@ UGOS boxes often end up running both NAS workloads and a pile of Docker Compose 
 - Disk temperatures are attached to the relevant disk device when sysfs exposes the sensor-to-disk relationship
 - Prometheus metrics endpoint
 - MQTT JSON state publishing
-- Home Assistant MQTT discovery with grouped host, disk, filesystem, network, array, project, and container devices
+- Home Assistant MQTT discovery with grouped host, disk, filesystem, network, array, project, container, and virtual machine devices
 - Home Assistant binary sensors for container running state, network carrier, and degraded arrays
 
 ## Requirements
 
 - Docker Engine API access
 - Linux host mounts if you want host / NAS metrics
+- `virsh` and libvirt socket access if you want UGOS Virtual Machine / QEMU monitoring
 - Go 1.26+ for local builds
 - MQTT broker only if you want MQTT/Home Assistant export
 
-The exporter reads the Docker Engine API directly. By default it uses `unix:///var/run/docker.sock`.
-Host metrics are disabled by default and require explicit bind mounts.
+The bridge reads the Docker Engine API directly. By default it uses `unix:///var/run/docker.sock`.
+Host metrics are disabled by default and require explicit bind mounts. VM collection is enabled when host metrics are enabled, but it is best-effort: if `virsh` or the libvirt socket is unavailable, VM data is skipped without failing the whole scrape.
 
 ## Repository Layout
 
-- `exporter/` - Go exporter app, internal packages, Dockerfiles, and compose example
+- `bridge/` - Go bridge app, internal packages, Dockerfiles, and compose example
 - `ha-cards/` - Home Assistant Lovelace cards
 - root - shared repo files like `go.mod`, release config, and top-level docs
 
@@ -62,64 +71,66 @@ Host metrics are disabled by default and require explicit bind mounts.
 
 Docker metrics:
 
-- `ugos_exporter_container_*`
-- `ugos_exporter_project_*`
+- `ugos_bridge_container_*`
+- `ugos_bridge_project_*`
 
-With `UGOS_EXPORTER_DETAILED_CONTAINER_STATS=true` or `DETAILED_CONTAINER_STATS=true`, the exporter also publishes cAdvisor-style per-container CPU time/throttling/spec metrics, raw memory breakdown metrics, per-interface network counters, block I/O counters, PID counts, OOM event/state metrics, start time/health metadata, and writable/rootfs size metrics.
+With `UGOS_BRIDGE_DETAILED_CONTAINER_STATS=true` or `DETAILED_CONTAINER_STATS=true`, the bridge also publishes cAdvisor-style per-container CPU time/throttling/spec metrics, raw memory breakdown metrics, per-interface network counters, block I/O counters, PID counts, OOM event/state metrics, start time/health metadata, and writable/rootfs size metrics.
 
 Host metrics:
 
-- `ugos_exporter_host_cpu_*`
-- `ugos_exporter_host_cpu_frequency_mhz`
-- `ugos_exporter_host_cpu_governor_info`
-- `ugos_exporter_host_memory_bytes`
-- `ugos_exporter_host_filesystem_*`
-- `ugos_exporter_host_disk_*`
-- `ugos_exporter_host_array_*`
-- `ugos_exporter_host_network_*`
-- `ugos_exporter_host_bond_*`
-- `ugos_exporter_host_gpu_*`
-- `ugos_exporter_host_gpu_engine_percent`
-- `ugos_exporter_host_gpu_stat`
-- `ugos_exporter_host_temperature_celsius`
-- `ugos_exporter_host_fan_speed_rpm`
-- `ugos_exporter_host_cooling_device_*`
-- `ugos_exporter_host_process_group_*`
+- `ugos_bridge_host_cpu_*`
+- `ugos_bridge_host_cpu_frequency_mhz`
+- `ugos_bridge_host_cpu_governor_info`
+- `ugos_bridge_host_memory_bytes`
+- `ugos_bridge_host_filesystem_*`
+- `ugos_bridge_host_disk_*`
+- `ugos_bridge_host_array_*`
+- `ugos_bridge_host_network_*`
+- `ugos_bridge_host_bond_*`
+- `ugos_bridge_host_gpu_*`
+- `ugos_bridge_host_gpu_engine_percent`
+- `ugos_bridge_host_gpu_stat`
+- `ugos_bridge_host_temperature_celsius`
+- `ugos_bridge_host_fan_speed_rpm`
+- `ugos_bridge_host_cooling_device_*`
+- `ugos_bridge_host_process_group_*`
+- `ugos_bridge_host_vm_*`
 
-Exporter health:
+Bridge health:
 
-- `ugos_exporter_up`
-- `ugos_exporter_last_collection_timestamp_seconds`
-- `ugos_exporter_container_stats_errors`
+- `ugos_bridge_up`
+- `ugos_bridge_last_collection_timestamp_seconds`
+- `ugos_bridge_container_stats_errors`
 
 Additional HTTP APIs:
 
 - `/api/processes?limit=10&sort=cpu`
+- `/api/vms`
 
 ## Build
 
 Local binary:
 
 ```bash
-go build -o ./bin/ugos-exporter ./exporter
+go build -o ./bin/ugos-bridge ./bridge
 ```
 
 Docker image:
 
 ```bash
-docker build -f exporter/Dockerfile -t ugos-exporter:latest .
+docker build -f bridge/Dockerfile -t ugos-bridge:latest .
 ```
 
 Published Docker Hub image:
 
 ```bash
-docker pull rcooler/ugos-exporter:latest
+docker pull rcooler/ugos-bridge:latest
 ```
 
 Docker Compose example:
 
 ```bash
-docker compose -f exporter/docker-compose.example.yml up -d --build
+docker compose -f bridge/docker-compose.example.yml up -d --build
 ```
 
 ## Run
@@ -127,7 +138,7 @@ docker compose -f exporter/docker-compose.example.yml up -d --build
 Local process:
 
 ```bash
-./bin/ugos-exporter \
+./bin/ugos-bridge \
   --docker-host unix:///var/run/docker.sock \
   --listen-address :9877
 ```
@@ -136,17 +147,17 @@ Docker container:
 
 ```bash
 docker run -d \
-  --name ugos-exporter \
+  --name ugos-bridge \
   -p 9877:9877 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  rcooler/ugos-exporter:latest
+  rcooler/ugos-bridge:latest
 ```
 
 With NAS host metrics, MQTT, and Home Assistant discovery:
 
 ```bash
 docker run -d \
-  --name ugos-exporter \
+  --name ugos-bridge \
   -p 9877:9877 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v /proc:/host/proc:ro \
@@ -154,66 +165,74 @@ docker run -d \
   -v /:/rootfs:ro \
   -v /volume1:/volume1:ro \
   -v /volume2:/volume2:ro \
+  -v /var/run/libvirt:/var/run/libvirt:ro \
   -v /dev/dri:/dev/dri \
-  -e UGOS_EXPORTER_HOST_METRICS_ENABLED=true \
-  -e UGOS_EXPORTER_HOST_PROCFS=/host/proc \
-  -e UGOS_EXPORTER_HOST_SYSFS=/host/sys \
-  -e UGOS_EXPORTER_HOST_NAME=ugreen-nas \
-  -e UGOS_EXPORTER_HOST_HOSTNAME_PATH=/rootfs/etc/hostname \
-  -e UGOS_EXPORTER_HOST_FILESYSTEMS='/:/rootfs,/volume1:/volume1,/volume2:/volume2' \
-  -e UGOS_EXPORTER_HOST_NETWORK_INCLUDE='eth.*,bond.*' \
-  -e UGOS_EXPORTER_HOST_DRI_PATH=/dev/dri \
-  -e UGOS_EXPORTER_MQTT_ENABLED=true \
-  -e UGOS_EXPORTER_MQTT_BROKER=tcp://host.docker.internal:1883 \
-  -e UGOS_EXPORTER_MQTT_USER=ha \
-  -e UGOS_EXPORTER_MQTT_PASS=change_me \
-  -e UGOS_EXPORTER_MQTT_CLIENT_ID=ugos_exporter \
-  -e UGOS_EXPORTER_MQTT_TOPIC_PREFIX=ugos_exporter \
-  -e UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX=homeassistant \
-  -e UGOS_EXPORTER_MQTT_INTERVAL=60 \
-  -e UGOS_EXPORTER_MQTT_RETAIN=true \
-  -e UGOS_EXPORTER_MQTT_EXPIRE_AFTER=360 \
-  rcooler/ugos-exporter:latest
+  -e UGOS_BRIDGE_HOST_METRICS_ENABLED=true \
+  -e UGOS_BRIDGE_HOST_PROCFS=/host/proc \
+  -e UGOS_BRIDGE_HOST_SYSFS=/host/sys \
+  -e UGOS_BRIDGE_HOST_NAME=ugreen-nas \
+  -e UGOS_BRIDGE_HOST_HOSTNAME_PATH=/rootfs/etc/hostname \
+  -e UGOS_BRIDGE_HOST_FILESYSTEMS='/:/rootfs,/volume1:/volume1,/volume2:/volume2' \
+  -e UGOS_BRIDGE_HOST_NETWORK_INCLUDE='eth.*,bond.*' \
+  -e UGOS_BRIDGE_HOST_DRI_PATH=/dev/dri \
+  -e UGOS_BRIDGE_HOST_VMS_ENABLED=true \
+  -e UGOS_BRIDGE_HOST_VIRSH_URI=qemu:///system \
+  -e UGOS_BRIDGE_VM_NAMES='ugos-app-vm-id-1:Windows 11,ugos-app-vm-id-2:Ubuntu Server' \
+  -e UGOS_BRIDGE_MQTT_ENABLED=true \
+  -e UGOS_BRIDGE_MQTT_BROKER=tcp://host.docker.internal:1883 \
+  -e UGOS_BRIDGE_MQTT_USER=ha \
+  -e UGOS_BRIDGE_MQTT_PASS=change_me \
+  -e UGOS_BRIDGE_MQTT_CLIENT_ID=ugos_bridge \
+  -e UGOS_BRIDGE_MQTT_TOPIC_PREFIX=ugos_bridge \
+  -e UGOS_BRIDGE_MQTT_DISCOVERY_PREFIX=homeassistant \
+  -e UGOS_BRIDGE_MQTT_INTERVAL=60 \
+  -e UGOS_BRIDGE_MQTT_RETAIN=true \
+  -e UGOS_BRIDGE_MQTT_EXPIRE_AFTER=360 \
+  rcooler/ugos-bridge:latest
 ```
 
 Docker Compose:
 
 ```yaml
 services:
-  ugos-exporter:
+  ugos-bridge:
     build:
       context: .
-      dockerfile: exporter/Dockerfile
+      dockerfile: bridge/Dockerfile
     restart: unless-stopped
     ports:
       - "9877:9877"
     environment:
-      UGOS_EXPORTER_DOCKER_HOST: "unix:///var/run/docker.sock"
-      UGOS_EXPORTER_LISTEN_ADDRESS: ":9877"
-      UGOS_EXPORTER_SCRAPE_INTERVAL: "15s"
-      # UGOS_EXPORTER_DETAILED_CONTAINER_STATS: "true"
-      UGOS_EXPORTER_HOST_METRICS_ENABLED: "true"
-      UGOS_EXPORTER_HOST_PROCFS: "/host/proc"
-      UGOS_EXPORTER_HOST_SYSFS: "/host/sys"
-      UGOS_EXPORTER_HOST_NAME: "ugreen-nas"
-      UGOS_EXPORTER_HOST_HOSTNAME_PATH: "/rootfs/etc/hostname"
-      UGOS_EXPORTER_HOST_FILESYSTEMS: "/:/rootfs,/volume1:/volume1,/volume2:/volume2"
-      UGOS_EXPORTER_HOST_NETWORK_INCLUDE: "eth.*,bond.*"
-      UGOS_EXPORTER_HOST_DRI_PATH: "/dev/dri"
+      UGOS_BRIDGE_DOCKER_HOST: "unix:///var/run/docker.sock"
+      UGOS_BRIDGE_LISTEN_ADDRESS: ":9877"
+      UGOS_BRIDGE_SCRAPE_INTERVAL: "15s"
+      # UGOS_BRIDGE_DETAILED_CONTAINER_STATS: "true"
+      UGOS_BRIDGE_HOST_METRICS_ENABLED: "true"
+      UGOS_BRIDGE_HOST_PROCFS: "/host/proc"
+      UGOS_BRIDGE_HOST_SYSFS: "/host/sys"
+      UGOS_BRIDGE_HOST_NAME: "ugreen-nas"
+      UGOS_BRIDGE_HOST_HOSTNAME_PATH: "/rootfs/etc/hostname"
+      UGOS_BRIDGE_HOST_FILESYSTEMS: "/:/rootfs,/volume1:/volume1,/volume2:/volume2"
+      UGOS_BRIDGE_HOST_NETWORK_INCLUDE: "eth.*,bond.*"
+      UGOS_BRIDGE_HOST_DRI_PATH: "/dev/dri"
+      UGOS_BRIDGE_HOST_VMS_ENABLED: "true"
+      UGOS_BRIDGE_HOST_VIRSH_URI: "qemu:///system"
+      # Optional display name overrides keyed by UGOS VM app/domain id.
+      # UGOS_BRIDGE_VM_NAMES: "ugos-app-vm-id-1:Windows 11,ugos-app-vm-id-2:Ubuntu Server"
       # Optional richer Intel GPU metrics via intel_gpu_top:
-      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED: "true"
-      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_DEVICE: "drm:/dev/dri/renderD128"
-      # UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PERIOD: "1s"
-      UGOS_EXPORTER_MQTT_ENABLED: "true"
-      UGOS_EXPORTER_MQTT_BROKER: "tcp://host.docker.internal:1883"
-      UGOS_EXPORTER_MQTT_USER: "ha"
-      UGOS_EXPORTER_MQTT_PASS: "change_me"
-      UGOS_EXPORTER_MQTT_CLIENT_ID: "ugos_exporter"
-      UGOS_EXPORTER_MQTT_TOPIC_PREFIX: "ugos_exporter"
-      UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX: "homeassistant"
-      UGOS_EXPORTER_MQTT_INTERVAL: "60"
-      UGOS_EXPORTER_MQTT_RETAIN: "true"
-      UGOS_EXPORTER_MQTT_EXPIRE_AFTER: "360"
+      # UGOS_BRIDGE_HOST_INTEL_GPU_TOP_ENABLED: "true"
+      # UGOS_BRIDGE_HOST_INTEL_GPU_TOP_DEVICE: "drm:/dev/dri/renderD128"
+      # UGOS_BRIDGE_HOST_INTEL_GPU_TOP_PERIOD: "1s"
+      UGOS_BRIDGE_MQTT_ENABLED: "true"
+      UGOS_BRIDGE_MQTT_BROKER: "tcp://host.docker.internal:1883"
+      UGOS_BRIDGE_MQTT_USER: "ha"
+      UGOS_BRIDGE_MQTT_PASS: "change_me"
+      UGOS_BRIDGE_MQTT_CLIENT_ID: "ugos_bridge"
+      UGOS_BRIDGE_MQTT_TOPIC_PREFIX: "ugos_bridge"
+      UGOS_BRIDGE_MQTT_DISCOVERY_PREFIX: "homeassistant"
+      UGOS_BRIDGE_MQTT_INTERVAL: "60"
+      UGOS_BRIDGE_MQTT_RETAIN: "true"
+      UGOS_BRIDGE_MQTT_EXPIRE_AFTER: "360"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
@@ -221,13 +240,14 @@ services:
       - /:/rootfs:ro
       - /volume1:/volume1:ro
       - /volume2:/volume2:ro
+      - /var/run/libvirt:/var/run/libvirt:ro
       - /dev/dri:/dev/dri
     # Optional for intel_gpu_top on Intel iGPU hosts:
     # privileged: true
     # pid: host
 ```
 
-Full example file: [exporter/docker-compose.example.yml](exporter/docker-compose.example.yml)
+Full example file: [bridge/docker-compose.example.yml](bridge/docker-compose.example.yml)
 
 ## Home Assistant Cards
 
@@ -242,77 +262,82 @@ Both build to minified production bundles under their own `dist/` directories.
 
 Flags and env vars:
 
-- `--listen-address`, `UGOS_EXPORTER_LISTEN_ADDRESS`
-- `--metrics-path`, `UGOS_EXPORTER_METRICS_PATH`
-- `--scrape-interval`, `UGOS_EXPORTER_SCRAPE_INTERVAL`
-- `--docker-host`, `UGOS_EXPORTER_DOCKER_HOST`
-- `--docker-timeout`, `UGOS_EXPORTER_DOCKER_TIMEOUT`
-- `--project-label`, `UGOS_EXPORTER_PROJECT_LABEL`
-- `--standalone-project-name`, `UGOS_EXPORTER_STANDALONE_PROJECT_NAME`
-- `--container-concurrency`, `UGOS_EXPORTER_CONTAINER_CONCURRENCY`
-- `--detailed-container-stats`, `UGOS_EXPORTER_DETAILED_CONTAINER_STATS`, `DETAILED_CONTAINER_STATS`
-- `--mqtt-broker`, `UGOS_EXPORTER_MQTT_BROKER`
-- `--mqtt-client-id`, `UGOS_EXPORTER_MQTT_CLIENT_ID`
-- `--mqtt-username`, `UGOS_EXPORTER_MQTT_USER`
-- `--mqtt-password`, `UGOS_EXPORTER_MQTT_PASS`
-- `--mqtt-topic-prefix`, `UGOS_EXPORTER_MQTT_TOPIC_PREFIX`
-- `--homeassistant-discovery-prefix`, `UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX`
-- `--mqtt-qos`, `UGOS_EXPORTER_MQTT_QOS`
-- `--mqtt-retain`, `UGOS_EXPORTER_MQTT_RETAIN`
-- `--mqtt-connect-timeout`, `UGOS_EXPORTER_MQTT_CONNECT_TIMEOUT`
-- `--homeassistant-expire-after`, `UGOS_EXPORTER_MQTT_EXPIRE_AFTER`
+- `--listen-address`, `UGOS_BRIDGE_LISTEN_ADDRESS`
+- `--metrics-path`, `UGOS_BRIDGE_METRICS_PATH`
+- `--scrape-interval`, `UGOS_BRIDGE_SCRAPE_INTERVAL`
+- `--docker-host`, `UGOS_BRIDGE_DOCKER_HOST`
+- `--docker-timeout`, `UGOS_BRIDGE_DOCKER_TIMEOUT`
+- `--project-label`, `UGOS_BRIDGE_PROJECT_LABEL`
+- `--standalone-project-name`, `UGOS_BRIDGE_STANDALONE_PROJECT_NAME`
+- `--container-concurrency`, `UGOS_BRIDGE_CONTAINER_CONCURRENCY`
+- `--detailed-container-stats`, `UGOS_BRIDGE_DETAILED_CONTAINER_STATS`, `DETAILED_CONTAINER_STATS`
+- `--mqtt-broker`, `UGOS_BRIDGE_MQTT_BROKER`
+- `--mqtt-client-id`, `UGOS_BRIDGE_MQTT_CLIENT_ID`
+- `--mqtt-username`, `UGOS_BRIDGE_MQTT_USER`
+- `--mqtt-password`, `UGOS_BRIDGE_MQTT_PASS`
+- `--mqtt-topic-prefix`, `UGOS_BRIDGE_MQTT_TOPIC_PREFIX`
+- `--homeassistant-discovery-prefix`, `UGOS_BRIDGE_MQTT_DISCOVERY_PREFIX`
+- `--mqtt-qos`, `UGOS_BRIDGE_MQTT_QOS`
+- `--mqtt-retain`, `UGOS_BRIDGE_MQTT_RETAIN`
+- `--mqtt-connect-timeout`, `UGOS_BRIDGE_MQTT_CONNECT_TIMEOUT`
+- `--homeassistant-expire-after`, `UGOS_BRIDGE_MQTT_EXPIRE_AFTER`
 
-`--detailed-container-stats` is disabled by default. When enabled, the exporter performs extra per-container Docker API calls and exposes cAdvisor-style container CPU, memory, network, block I/O, PID, OOM, start time, health, and filesystem size metrics in Prometheus.
-- `--host-metrics-enabled`, `UGOS_EXPORTER_HOST_METRICS_ENABLED`
-- `--host-procfs`, `UGOS_EXPORTER_HOST_PROCFS`
-- `--host-sysfs`, `UGOS_EXPORTER_HOST_SYSFS`
-- `--host-name`, `UGOS_EXPORTER_HOST_NAME`
-- `--host-hostname-path`, `UGOS_EXPORTER_HOST_HOSTNAME_PATH`
-- `--host-filesystems`, `UGOS_EXPORTER_HOST_FILESYSTEMS`
-- `--host-network-include`, `UGOS_EXPORTER_HOST_NETWORK_INCLUDE`
-- `--host-dri-path`, `UGOS_EXPORTER_HOST_DRI_PATH`
-- `--host-intel-gpu-top-enabled`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_ENABLED`
-- `--host-intel-gpu-top-path`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PATH`
-- `--host-intel-gpu-top-device`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_DEVICE`
-- `--host-intel-gpu-top-period`, `UGOS_EXPORTER_HOST_INTEL_GPU_TOP_PERIOD`
+`--detailed-container-stats` is disabled by default. When enabled, the bridge performs extra per-container Docker API calls and exposes cAdvisor-style container CPU, memory, network, block I/O, PID, OOM, start time, health, and filesystem size metrics in Prometheus.
+- `--host-metrics-enabled`, `UGOS_BRIDGE_HOST_METRICS_ENABLED`
+- `--host-procfs`, `UGOS_BRIDGE_HOST_PROCFS`
+- `--host-sysfs`, `UGOS_BRIDGE_HOST_SYSFS`
+- `--host-name`, `UGOS_BRIDGE_HOST_NAME`
+- `--host-hostname-path`, `UGOS_BRIDGE_HOST_HOSTNAME_PATH`
+- `--host-filesystems`, `UGOS_BRIDGE_HOST_FILESYSTEMS`
+- `--host-network-include`, `UGOS_BRIDGE_HOST_NETWORK_INCLUDE`
+- `--host-dri-path`, `UGOS_BRIDGE_HOST_DRI_PATH`
+- `--host-intel-gpu-top-enabled`, `UGOS_BRIDGE_HOST_INTEL_GPU_TOP_ENABLED`
+- `--host-intel-gpu-top-path`, `UGOS_BRIDGE_HOST_INTEL_GPU_TOP_PATH`
+- `--host-intel-gpu-top-device`, `UGOS_BRIDGE_HOST_INTEL_GPU_TOP_DEVICE`
+- `--host-intel-gpu-top-period`, `UGOS_BRIDGE_HOST_INTEL_GPU_TOP_PERIOD`
+- `--host-virtual-machines-enabled`, `UGOS_BRIDGE_HOST_VMS_ENABLED`
+- `--host-virsh-path`, `UGOS_BRIDGE_HOST_VIRSH_PATH`
+- `--host-virsh-uri`, `UGOS_BRIDGE_HOST_VIRSH_URI`
+- `--host-virsh-timeout`, `UGOS_BRIDGE_HOST_VIRSH_TIMEOUT`
+- `--host-vm-name-overrides`, `UGOS_BRIDGE_VM_NAMES`
 
-`UGOS_EXPORTER_HOST_HOSTNAME_PATH` defaults to `/rootfs/etc/hostname`. With the recommended `/:/rootfs:ro` mount, that resolves to the NAS hostname instead of the container hostname.
+`UGOS_BRIDGE_HOST_HOSTNAME_PATH` defaults to `/rootfs/etc/hostname`. With the recommended `/:/rootfs:ro` mount, that resolves to the NAS hostname instead of the container hostname.
 
-If UGOS still reports a container-style hostname such as a short hex ID, set `UGOS_EXPORTER_HOST_NAME` explicitly to the NAS name you want in Prometheus and Home Assistant.
+If UGOS still reports a container-style hostname such as a short hex ID, set `UGOS_BRIDGE_HOST_NAME` explicitly to the NAS name you want in Prometheus and Home Assistant.
 
 Preferred MQTT env vars:
 
-- `UGOS_EXPORTER_MQTT_ENABLED`
-- `UGOS_EXPORTER_MQTT_BROKER`
-- `UGOS_EXPORTER_MQTT_USER`
-- `UGOS_EXPORTER_MQTT_PASS`
-- `UGOS_EXPORTER_MQTT_CLIENT_ID`
-- `UGOS_EXPORTER_MQTT_TOPIC_PREFIX`
-- `UGOS_EXPORTER_MQTT_DISCOVERY_PREFIX`
-- `UGOS_EXPORTER_MQTT_INTERVAL`
-- `UGOS_EXPORTER_MQTT_RETAIN`
-- `UGOS_EXPORTER_MQTT_QOS`
-- `UGOS_EXPORTER_MQTT_CONNECT_TIMEOUT`
-- `UGOS_EXPORTER_MQTT_EXPIRE_AFTER`
+- `UGOS_BRIDGE_MQTT_ENABLED`
+- `UGOS_BRIDGE_MQTT_BROKER`
+- `UGOS_BRIDGE_MQTT_USER`
+- `UGOS_BRIDGE_MQTT_PASS`
+- `UGOS_BRIDGE_MQTT_CLIENT_ID`
+- `UGOS_BRIDGE_MQTT_TOPIC_PREFIX`
+- `UGOS_BRIDGE_MQTT_DISCOVERY_PREFIX`
+- `UGOS_BRIDGE_MQTT_INTERVAL`
+- `UGOS_BRIDGE_MQTT_RETAIN`
+- `UGOS_BRIDGE_MQTT_QOS`
+- `UGOS_BRIDGE_MQTT_CONNECT_TIMEOUT`
+- `UGOS_BRIDGE_MQTT_EXPIRE_AFTER`
 
-`UGOS_EXPORTER_MQTT_INTERVAL` and `UGOS_EXPORTER_MQTT_EXPIRE_AFTER` accept either plain seconds like `60` and `360`, or Go duration strings like `60s` and `6m`.
+`UGOS_BRIDGE_MQTT_INTERVAL` and `UGOS_BRIDGE_MQTT_EXPIRE_AFTER` accept either plain seconds like `60` and `360`, or Go duration strings like `60s` and `6m`.
 
-`UGOS_EXPORTER_HOST_FILESYSTEMS` is a comma-separated list of `host_mountpoint:container_path` pairs. For the NAS layout discussed here, use:
+`UGOS_BRIDGE_HOST_FILESYSTEMS` is a comma-separated list of `host_mountpoint:container_path` pairs. For the NAS layout discussed here, use:
 
 ```text
 /:/rootfs,/volume1:/volume1,/volume2:/volume2
 ```
 
-`UGOS_EXPORTER_HOST_NETWORK_INCLUDE` is a comma-separated list of regular expressions used to decide which host interfaces are exposed. Matching is done against the whole interface name, so `eth.*` matches `eth0` but not `veth123`. The default is `eth.*,bond.*`, which keeps virtual interfaces such as `docker*`, `veth*`, and bridge devices out of the exported host network view. Set it to `.*` if you want every interface.
+`UGOS_BRIDGE_HOST_NETWORK_INCLUDE` is a comma-separated list of regular expressions used to decide which host interfaces are exposed. Matching is done against the whole interface name, so `eth.*` matches `eth0` but not `veth123`. The default is `eth.*,bond.*`, which keeps virtual interfaces such as `docker*`, `veth*`, and bridge devices out of the exported host network view. Set it to `.*` if you want every interface.
 
 ## Process API
 
-The exporter exposes grouped host processes at `/api/processes`.
+The bridge exposes grouped host processes at `/api/processes`.
 
 - Default output is the top 10 software groups by CPU usage.
 - Multiple worker processes are merged into one software entry, so several `syncspace` processes are shown as `Sync & Backup`.
 - Known UGOS-related processes are normalized to friendly names such as `Docker`, `Virtual Machine`, and `Sync & Backup`.
-- The same top 10 groups are also exported to Prometheus as `ugos_exporter_host_process_group_*` metrics.
+- The same top 10 groups are also exported to Prometheus as `ugos_bridge_host_process_group_*` metrics.
 - When MQTT/Home Assistant discovery is enabled, the same top 10 groups are published as per-software Home Assistant sensors under the host device tree.
 
 Examples:
@@ -331,6 +356,46 @@ Each entry includes:
 - `memory_bytes`
 - `cpu_time_seconds`
 
+## Virtual Machine API
+
+The bridge exposes UGOS/QEMU virtual machines at `/api/vms` when host metrics are enabled and `virsh` can reach libvirt.
+
+- `ugos_vm_id` is the libvirt domain name reported by the UGOS Virtual Machine app.
+- `name` defaults to the attached ISO filename without extension, then falls back to the first disk image filename, then the UGOS VM ID.
+- `source_name` is the name derived from the ISO/disk path before any override.
+- `UGOS_BRIDGE_VM_NAMES` can override display names by UGOS VM ID.
+
+Example:
+
+```bash
+curl http://localhost:9877/api/vms
+```
+
+Compose override example:
+
+```yaml
+environment:
+  UGOS_BRIDGE_VM_NAMES: "ugos-app-vm-id-1:Windows 11,ugos-app-vm-id-2:Ubuntu Server"
+```
+
+Each VM includes:
+
+- `ugos_vm_id`
+- `name`
+- `source_name`
+- `state`
+- `running`
+- `vcpus`
+- `cpu_percent`
+- `memory_bytes`
+- `max_memory_bytes`
+- `disk_read_bytes`
+- `disk_write_bytes`
+- `network_rx_bytes`
+- `network_tx_bytes`
+- `iso_path`
+- `disk_paths`
+
 ## Home Assistant
 
 MQTT discovery creates separate devices for:
@@ -338,6 +403,7 @@ MQTT discovery creates separate devices for:
 - the Linux host
 - Docker projects
 - Docker containers
+- Virtual machines
 - filesystems
 - physical disks
 - md arrays / storage pools
@@ -358,15 +424,23 @@ Projects are detected from the label `com.docker.compose.project` by default. Co
 - `npipe://` is not implemented in this version
 - Docker-only mode only needs the Docker socket mount
 - Host metrics mode needs `/proc`, `/sys`, rootfs, target NAS volume mounts, and optionally `/dev/dri`
+- VM metrics need `virsh` plus `/var/run/libvirt` mounted into the container; the Docker images include `libvirt-clients`
+- UGOS VM app IDs are kept as `ugos_vm_id`; display names are derived from ISO/disk filenames or `UGOS_BRIDGE_VM_NAMES`
 - GPU busy percent depends on what the host kernel and driver expose in sysfs; frequency metrics are more widely available than true busy counters
 - `intel_gpu_top` metrics require the binary in the container image and, on many hosts, `privileged: true`, `pid: host`, plus `/dev/dri`
 - Temperature and fan metrics depend on the vendor kernel exposing `hwmon` or `thermal_zone` sensors in `/sys`
 - Disk temperature attribution depends on sysfs links under `hwmon`; if UGOS does not expose those links, the sensors stay grouped as generic host health sensors
 - CPU frequency and governor metrics depend on `cpufreq` files under `/sys/devices/system/cpu`; some NAS kernels may expose only part of that data
 
+## License
+
+MIT License. See [LICENSE](./LICENSE).
+
+See [NOTICE](./NOTICE) for trademark and affiliation notice.
+
 ## Release
 
-GoReleaser is configured in `.goreleaser.yml` to publish multi-arch Docker images for `linux/amd64` and `linux/arm64` to Docker Hub as `rcooler/ugos-exporter`.
+GoReleaser is configured in `.goreleaser.yml` to publish multi-arch Docker images for `linux/amd64` and `linux/arm64` to Docker Hub as `rcooler/ugos-bridge`.
 
 GitHub Actions release workflow:
 

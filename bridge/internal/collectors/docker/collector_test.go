@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/dockerapi"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/dockerapi"
 )
 
 func TestCollectorDetailedContainerStatsGate(t *testing.T) {

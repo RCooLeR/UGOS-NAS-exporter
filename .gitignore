@@ -6,8 +6,8 @@ bin/
 dist/
 coverage.out
 *.test
-ugos-exporter
-ugos-exporter.exe
+ugos-bridge
+ugos-bridge.exe
 *.log
 metrics.txt
 ha-cards/**/node_modules/

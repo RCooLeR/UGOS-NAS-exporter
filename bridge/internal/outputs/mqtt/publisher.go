@@ -11,7 +11,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/rs/zerolog"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
@@ -86,6 +86,16 @@ var containerSensors = map[string]sensorDefinition{
 	"cpu":     {NameSuffix: "CPU", ObjectID: "cpu_usage_percent", ValueKey: "cpu_usage_percent", Unit: "%", Icon: "mdi:cpu-64-bit", StateClass: "measurement"},
 	"memory":  {NameSuffix: "Memory", ObjectID: "memory_usage_bytes", ValueKey: "memory_usage_bytes", Unit: "B", Icon: "mdi:memory", DeviceClass: "data_size", StateClass: "measurement"},
 	"running": {NameSuffix: "Running", ObjectID: "running", ValueKey: "running", Icon: "mdi:play-circle", StateClass: "measurement"},
+}
+
+var vmSensors = map[string]sensorDefinition{
+	"cpu":            {NameSuffix: "CPU", ObjectID: "cpu_usage_percent", ValueKey: "cpu_usage_percent", Unit: "%", Icon: "mdi:cpu-64-bit", StateClass: "measurement"},
+	"memory":         {NameSuffix: "Memory Used", ObjectID: "memory_usage_bytes", ValueKey: "memory_usage_bytes", Unit: "B", Icon: "mdi:memory", DeviceClass: "data_size", StateClass: "measurement"},
+	"memory_current": {NameSuffix: "Memory Current", ObjectID: "memory_current_bytes", ValueKey: "memory_current_bytes", Unit: "B", Icon: "mdi:memory", DeviceClass: "data_size", StateClass: "measurement"},
+	"running":        {NameSuffix: "Running", ObjectID: "running", ValueKey: "running", Icon: "mdi:play-circle", StateClass: "measurement"},
+	"vcpus":          {NameSuffix: "vCPUs", ObjectID: "vcpus", ValueKey: "vcpus", Icon: "mdi:chip", StateClass: "measurement"},
+	"disk_read":      {NameSuffix: "Disk Read", ObjectID: "disk_read_bytes", ValueKey: "disk_read_bytes", Unit: "B", Icon: "mdi:download", DeviceClass: "data_size", StateClass: "total_increasing"},
+	"disk_write":     {NameSuffix: "Disk Write", ObjectID: "disk_write_bytes", ValueKey: "disk_write_bytes", Unit: "B", Icon: "mdi:upload", DeviceClass: "data_size", StateClass: "total_increasing"},
 }
 
 var hostSensors = map[string]sensorDefinition{
@@ -172,6 +182,10 @@ var containerBinarySensors = map[string]binarySensorDefinition{
 	"running": {NameSuffix: "Running", ObjectID: "running", ValueTemplate: "{{ value_json.running }}", PayloadOn: "1", PayloadOff: "0", Icon: "mdi:docker"},
 }
 
+var vmBinarySensors = map[string]binarySensorDefinition{
+	"running": {NameSuffix: "Running", ObjectID: "running", ValueTemplate: "{{ value_json.running }}", PayloadOn: "1", PayloadOff: "0", Icon: "mdi:desktop-tower-monitor"},
+}
+
 var filesystemBinarySensors = map[string]binarySensorDefinition{
 	"readonly": {NameSuffix: "Read Only", ObjectID: "read_only", ValueTemplate: "{{ value_json.read_only }}", PayloadOn: "1", PayloadOff: "0", DeviceClass: "problem", Icon: "mdi:file-lock"},
 }
@@ -195,13 +209,13 @@ var arrayBinarySensors = map[string]binarySensorDefinition{
 
 func NewMQTTPublisher(cfg MQTTConfig) (*MQTTPublisher, error) {
 	if cfg.TopicPrefix == "" {
-		cfg.TopicPrefix = "ugos_exporter"
+		cfg.TopicPrefix = "ugos_bridge"
 	}
 	if cfg.DiscoveryPrefix == "" {
 		cfg.DiscoveryPrefix = "homeassistant"
 	}
 	if cfg.ClientID == "" {
-		cfg.ClientID = "ugos-exporter"
+		cfg.ClientID = "ugos-bridge"
 	}
 	if cfg.ConnectTimeout <= 0 {
 		cfg.ConnectTimeout = 10 * time.Second
@@ -274,6 +288,9 @@ func (p *MQTTPublisher) PublishSnapshot(snapshot model.Snapshot) error {
 	if err := p.publishContainers(snapshot, currentEntities); err != nil {
 		return err
 	}
+	if err := p.publishVirtualMachines(snapshot, currentEntities); err != nil {
+		return err
+	}
 
 	for key, entity := range p.discoveredEntities {
 		if _, ok := currentEntities[key]; ok {
@@ -294,33 +311,46 @@ func (p *MQTTPublisher) PublishSnapshot(snapshot model.Snapshot) error {
 
 func (p *MQTTPublisher) publishProjects(snapshot model.Snapshot, currentEntities map[string]publishedEntity) error {
 	for _, project := range snapshot.Projects {
-		slug := slugify(project.Name)
-		stateTopic := fmt.Sprintf("%s/projects/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
-		payload := map[string]any{
-			"project":            project.Name,
-			"project_slug":       slug,
-			"cpu_usage_percent":  project.CPUPercent,
-			"memory_usage_bytes": project.MemoryUsageBytes,
-			"total_containers":   project.TotalContainers,
-			"running_containers": project.RunningContainers,
-			"containers":         projectContainerAttributes(snapshot.Containers, project.Name),
-			"collected_at":       snapshot.CollectedAt.Format(time.RFC3339),
-		}
-		if err := p.publishJSON(stateTopic, payload); err != nil {
+		if err := p.publishProjectState(currentEntities, project.Name, project.CPUPercent, project.MemoryUsageBytes, project.TotalContainers, project.RunningContainers, "Project", "Project", projectContainerAttributes(snapshot.Containers, project.Name), snapshot.CollectedAt); err != nil {
 			return err
 		}
+	}
+	if snapshot.Host != nil && len(snapshot.Host.VMs) > 0 {
+		total, running, cpu, memory := virtualMachineProjectTotals(snapshot.Host.VMs)
+		if err := p.publishProjectState(currentEntities, "Virtual machines", cpu, memory, total, running, "Virtual Machine Project", "Virtual Machines", virtualMachineAttributes(snapshot.Host.VMs), snapshot.CollectedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		for key, def := range projectSensors {
-			entityKey := fmt.Sprintf("project:%s:%s", slug, key)
-			discoveryTopic := p.discoveryTopic("sensor", "project_"+slug, def.ObjectID)
-			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, project.Name, def, deviceDescriptor{
-				ID:           fmt.Sprintf("ugos_exporter_project_%s", slug),
-				Name:         fmt.Sprintf("Compose project %s", project.Name),
-				Manufacturer: "RCooLeR",
-				Model:        "Compose Project",
-			}); err != nil {
-				return err
-			}
+func (p *MQTTPublisher) publishProjectState(currentEntities map[string]publishedEntity, name string, cpuPercent float64, memoryBytes uint64, total int, running int, modelName string, entityPrefix string, children []map[string]any, collectedAt time.Time) error {
+	slug := slugify(name)
+	stateTopic := fmt.Sprintf("%s/projects/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
+	payload := map[string]any{
+		"project":            name,
+		"project_slug":       slug,
+		"cpu_usage_percent":  cpuPercent,
+		"memory_usage_bytes": memoryBytes,
+		"total_containers":   total,
+		"running_containers": running,
+		"containers":         children,
+		"collected_at":       collectedAt.Format(time.RFC3339),
+	}
+	if err := p.publishJSON(stateTopic, payload); err != nil {
+		return err
+	}
+
+	for key, def := range projectSensors {
+		entityKey := fmt.Sprintf("project:%s:%s", slug, key)
+		discoveryTopic := p.discoveryTopic("sensor", "project_"+slug, def.ObjectID)
+		if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, name, def, deviceDescriptor{
+			ID:           fmt.Sprintf("ugos_bridge_project_%s", slug),
+			Name:         fmt.Sprintf("%s %s", entityPrefix, name),
+			Manufacturer: "RCooLeR",
+			Model:        modelName,
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -352,9 +382,9 @@ func (p *MQTTPublisher) publishContainers(snapshot model.Snapshot, currentEntiti
 			entityKey := fmt.Sprintf("container:%s:%s", slug, key)
 			discoveryTopic := p.discoveryTopic("sensor", "container_"+slug, def.ObjectID)
 			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, container.Name, def, deviceDescriptor{
-				ID:           fmt.Sprintf("ugos_exporter_container_%s", slug),
+				ID:           fmt.Sprintf("ugos_bridge_container_%s", slug),
 				Name:         fmt.Sprintf("Docker container %s", container.Name),
-				ViaDeviceID:  fmt.Sprintf("ugos_exporter_project_%s", slugify(container.Project)),
+				ViaDeviceID:  fmt.Sprintf("ugos_bridge_project_%s", slugify(container.Project)),
 				Manufacturer: "RCooLeR",
 				Model:        "Docker Container",
 			}); err != nil {
@@ -365,9 +395,9 @@ func (p *MQTTPublisher) publishContainers(snapshot model.Snapshot, currentEntiti
 			entityKey := fmt.Sprintf("container_binary:%s:%s", slug, key)
 			discoveryTopic := p.discoveryTopic("binary_sensor", "container_"+slug, def.ObjectID)
 			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, container.Name, def, deviceDescriptor{
-				ID:           fmt.Sprintf("ugos_exporter_container_%s", slug),
+				ID:           fmt.Sprintf("ugos_bridge_container_%s", slug),
 				Name:         fmt.Sprintf("Docker container %s", container.Name),
-				ViaDeviceID:  fmt.Sprintf("ugos_exporter_project_%s", slugify(container.Project)),
+				ViaDeviceID:  fmt.Sprintf("ugos_bridge_project_%s", slugify(container.Project)),
 				Manufacturer: "RCooLeR",
 				Model:        "Docker Container",
 			}); err != nil {
@@ -378,10 +408,49 @@ func (p *MQTTPublisher) publishContainers(snapshot model.Snapshot, currentEntiti
 	return nil
 }
 
+func (p *MQTTPublisher) publishVirtualMachines(snapshot model.Snapshot, currentEntities map[string]publishedEntity) error {
+	if snapshot.Host == nil {
+		return nil
+	}
+
+	projectSlug := slugify("Virtual machines")
+	for _, vm := range snapshot.Host.VMs {
+		slug := slugify(vm.UGOSVMID)
+		stateTopic := fmt.Sprintf("%s/virtual_machines/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
+		payload := virtualMachinePayload(vm, snapshot.CollectedAt)
+		if err := p.publishJSON(stateTopic, payload); err != nil {
+			return err
+		}
+
+		device := deviceDescriptor{
+			ID:           fmt.Sprintf("ugos_bridge_vm_%s", slug),
+			Name:         fmt.Sprintf("Virtual machine %s", vm.Name),
+			ViaDeviceID:  fmt.Sprintf("ugos_bridge_project_%s", projectSlug),
+			Manufacturer: "RCooLeR",
+			Model:        "UGOS Virtual Machine",
+		}
+		for key, def := range vmSensors {
+			entityKey := fmt.Sprintf("vm:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("sensor", "vm_"+slug, def.ObjectID)
+			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, vm.Name, def, device); err != nil {
+				return err
+			}
+		}
+		for key, def := range vmBinarySensors {
+			entityKey := fmt.Sprintf("vm_binary:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("binary_sensor", "vm_"+slug, def.ObjectID)
+			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, vm.Name, def, device); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map[string]publishedEntity) error {
 	hostSnapshot := snapshot.Host
 	hostSlug := slugify(hostSnapshot.Name)
-	hostDeviceID := fmt.Sprintf("ugos_exporter_host_%s", hostSlug)
+	hostDeviceID := fmt.Sprintf("ugos_bridge_host_%s", hostSlug)
 	hostStateTopic := fmt.Sprintf("%s/host/state", trimSlashes(p.cfg.TopicPrefix))
 
 	hostPayload := map[string]any{
@@ -415,7 +484,7 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 			ID:           hostDeviceID,
 			Name:         hostSnapshot.Name,
 			Manufacturer: "RCooLeR",
-			Model:        "UGOS Exporter Host",
+			Model:        "UGOS Bridge Host",
 		}); err != nil {
 			return err
 		}
@@ -449,6 +518,55 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 				ViaDeviceID:  hostDeviceID,
 				Manufacturer: "RCooLeR",
 				Model:        "Host Software",
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, array := range hostSnapshot.Arrays {
+		slug := slugify(array.Name)
+		stateTopic := fmt.Sprintf("%s/host/arrays/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
+		payload := map[string]any{
+			"name":                   array.Name,
+			"degraded_disks":         array.DegradedDisks,
+			"active_disks":           array.DisksActive,
+			"total_disks":            array.DisksTotal,
+			"sync_completed_percent": array.SyncCompletedPercent,
+			"size_bytes":             array.SizeBytes,
+			"state":                  array.State,
+			"level":                  array.Level,
+			"members":                array.Members,
+			"mountpoints":            array.Mountpoints,
+			"sync_action":            array.SyncAction,
+			"collected_at":           snapshot.CollectedAt.Format(time.RFC3339),
+		}
+		if err := p.publishJSON(stateTopic, payload); err != nil {
+			return err
+		}
+
+		for key, def := range arraySensors {
+			entityKey := fmt.Sprintf("array:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("sensor", "array_"+slug, def.ObjectID)
+			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, array.Name), def, deviceDescriptor{
+				ID:           fmt.Sprintf("%s_array_%s", hostDeviceID, slug),
+				Name:         fmt.Sprintf("%s Array %s", hostSnapshot.Name, array.Name),
+				ViaDeviceID:  hostDeviceID,
+				Manufacturer: "RCooLeR",
+				Model:        strings.ToUpper(array.Level),
+			}); err != nil {
+				return err
+			}
+		}
+		for key, def := range arrayBinarySensors {
+			entityKey := fmt.Sprintf("array_binary:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("binary_sensor", "array_"+slug, def.ObjectID)
+			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, array.Name), def, deviceDescriptor{
+				ID:           fmt.Sprintf("%s_array_%s", hostDeviceID, slug),
+				Name:         fmt.Sprintf("%s Array %s", hostSnapshot.Name, array.Name),
+				ViaDeviceID:  hostDeviceID,
+				Manufacturer: "RCooLeR",
+				Model:        strings.ToUpper(array.Level),
 			}); err != nil {
 				return err
 			}
@@ -536,58 +654,6 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 				ViaDeviceID:  hostDeviceID,
 				Manufacturer: "RCooLeR",
 				Model:        strings.ToUpper(disk.Type),
-			}); err != nil {
-				return err
-			}
-		}
-	}
-
-	for _, network := range hostSnapshot.Networks {
-		slug := slugify(network.Name)
-		viaDeviceID := hostDeviceID
-		if network.Master != "" {
-			viaDeviceID = fmt.Sprintf("%s_bond_%s", hostDeviceID, slugify(network.Master))
-		}
-		stateTopic := fmt.Sprintf("%s/host/networks/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
-		payload := map[string]any{
-			"name":                network.Name,
-			"rx_bytes_per_second": network.RxBytesPerSec,
-			"tx_bytes_per_second": network.TxBytesPerSec,
-			"speed_mbps":          network.SpeedMbps,
-			"carrier":             boolToInt(network.Carrier),
-			"oper_state":          network.OperState,
-			"duplex":              network.Duplex,
-			"collected_at":        snapshot.CollectedAt.Format(time.RFC3339),
-		}
-		if err := p.publishJSON(stateTopic, payload); err != nil {
-			return err
-		}
-
-		for key, def := range networkSensors {
-			if key == "carrier" {
-				continue
-			}
-			entityKey := fmt.Sprintf("network:%s:%s", slug, key)
-			discoveryTopic := p.discoveryTopic("sensor", "network_"+slug, def.ObjectID)
-			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, network.Name), def, deviceDescriptor{
-				ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slug),
-				Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, network.Name),
-				ViaDeviceID:  viaDeviceID,
-				Manufacturer: "RCooLeR",
-				Model:        "Network Interface",
-			}); err != nil {
-				return err
-			}
-		}
-		for key, def := range networkBinarySensors {
-			entityKey := fmt.Sprintf("network_binary:%s:%s", slug, key)
-			discoveryTopic := p.discoveryTopic("binary_sensor", "network_"+slug, def.ObjectID)
-			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, network.Name), def, deviceDescriptor{
-				ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slug),
-				Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, network.Name),
-				ViaDeviceID:  viaDeviceID,
-				Manufacturer: "RCooLeR",
-				Model:        "Network Interface",
 			}); err != nil {
 				return err
 			}
@@ -686,49 +752,52 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 		}
 	}
 
-	for _, array := range hostSnapshot.Arrays {
-		slug := slugify(array.Name)
-		stateTopic := fmt.Sprintf("%s/host/arrays/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
+	for _, network := range hostSnapshot.Networks {
+		slug := slugify(network.Name)
+		viaDeviceID := hostDeviceID
+		if network.Master != "" {
+			viaDeviceID = fmt.Sprintf("%s_bond_%s", hostDeviceID, slugify(network.Master))
+		}
+		stateTopic := fmt.Sprintf("%s/host/networks/%s/state", trimSlashes(p.cfg.TopicPrefix), slug)
 		payload := map[string]any{
-			"name":                   array.Name,
-			"degraded_disks":         array.DegradedDisks,
-			"active_disks":           array.DisksActive,
-			"total_disks":            array.DisksTotal,
-			"sync_completed_percent": array.SyncCompletedPercent,
-			"size_bytes":             array.SizeBytes,
-			"state":                  array.State,
-			"level":                  array.Level,
-			"members":                array.Members,
-			"mountpoints":            array.Mountpoints,
-			"sync_action":            array.SyncAction,
-			"collected_at":           snapshot.CollectedAt.Format(time.RFC3339),
+			"name":                network.Name,
+			"rx_bytes_per_second": network.RxBytesPerSec,
+			"tx_bytes_per_second": network.TxBytesPerSec,
+			"speed_mbps":          network.SpeedMbps,
+			"carrier":             boolToInt(network.Carrier),
+			"oper_state":          network.OperState,
+			"duplex":              network.Duplex,
+			"collected_at":        snapshot.CollectedAt.Format(time.RFC3339),
 		}
 		if err := p.publishJSON(stateTopic, payload); err != nil {
 			return err
 		}
 
-		for key, def := range arraySensors {
-			entityKey := fmt.Sprintf("array:%s:%s", slug, key)
-			discoveryTopic := p.discoveryTopic("sensor", "array_"+slug, def.ObjectID)
-			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, array.Name), def, deviceDescriptor{
-				ID:           fmt.Sprintf("%s_array_%s", hostDeviceID, slug),
-				Name:         fmt.Sprintf("%s Array %s", hostSnapshot.Name, array.Name),
-				ViaDeviceID:  hostDeviceID,
+		for key, def := range networkSensors {
+			if key == "carrier" {
+				continue
+			}
+			entityKey := fmt.Sprintf("network:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("sensor", "network_"+slug, def.ObjectID)
+			if err := p.ensureSensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, network.Name), def, deviceDescriptor{
+				ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slug),
+				Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, network.Name),
+				ViaDeviceID:  viaDeviceID,
 				Manufacturer: "RCooLeR",
-				Model:        strings.ToUpper(array.Level),
+				Model:        "Network Interface",
 			}); err != nil {
 				return err
 			}
 		}
-		for key, def := range arrayBinarySensors {
-			entityKey := fmt.Sprintf("array_binary:%s:%s", slug, key)
-			discoveryTopic := p.discoveryTopic("binary_sensor", "array_"+slug, def.ObjectID)
-			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, array.Name), def, deviceDescriptor{
-				ID:           fmt.Sprintf("%s_array_%s", hostDeviceID, slug),
-				Name:         fmt.Sprintf("%s Array %s", hostSnapshot.Name, array.Name),
-				ViaDeviceID:  hostDeviceID,
+		for key, def := range networkBinarySensors {
+			entityKey := fmt.Sprintf("network_binary:%s:%s", slug, key)
+			discoveryTopic := p.discoveryTopic("binary_sensor", "network_"+slug, def.ObjectID)
+			if err := p.ensureBinarySensor(discoveryTopic, stateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, network.Name), def, deviceDescriptor{
+				ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slug),
+				Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, network.Name),
+				ViaDeviceID:  viaDeviceID,
 				Manufacturer: "RCooLeR",
-				Model:        strings.ToUpper(array.Level),
+				Model:        "Network Interface",
 			}); err != nil {
 				return err
 			}
@@ -975,7 +1044,7 @@ func (p *MQTTPublisher) ensureBinarySensor(discoveryTopic string, stateTopic str
 }
 
 func (p *MQTTPublisher) discoveryTopic(component string, slug string, objectID string) string {
-	return fmt.Sprintf("%s/%s/ugos_exporter_%s/%s/config", trimSlashes(p.cfg.DiscoveryPrefix), component, slug, objectID)
+	return fmt.Sprintf("%s/%s/ugos_bridge_%s/%s/config", trimSlashes(p.cfg.DiscoveryPrefix), component, slug, objectID)
 }
 
 func (p *MQTTPublisher) publishJSON(topic string, payload any) error {
@@ -1097,6 +1166,79 @@ func projectContainerAttributes(containers []model.ContainerSnapshot, projectNam
 		items = append(items, containerAttributes(container))
 	}
 	return items
+}
+
+func virtualMachineProjectTotals(vms []model.VirtualMachineSnapshot) (total int, running int, cpuPercent float64, memoryBytes uint64) {
+	for _, vm := range vms {
+		total++
+		if vm.Running {
+			running++
+		}
+		cpuPercent += vm.CPUPercent
+		memoryBytes += vmMemoryUsageBytes(vm)
+	}
+	return total, running, cpuPercent, memoryBytes
+}
+
+func vmMemoryUsageBytes(vm model.VirtualMachineSnapshot) uint64 {
+	if vm.MemoryUsageBytes > 0 {
+		return vm.MemoryUsageBytes
+	}
+	return vm.MemoryBytes
+}
+
+func virtualMachineAttributes(vms []model.VirtualMachineSnapshot) []map[string]any {
+	items := make([]map[string]any, 0, len(vms))
+	for _, vm := range vms {
+		items = append(items, virtualMachineContainerAttribute(vm))
+	}
+	return items
+}
+
+func virtualMachineContainerAttribute(vm model.VirtualMachineSnapshot) map[string]any {
+	return map[string]any{
+		"name":                   vm.Name,
+		"container":              vm.Name,
+		"container_slug":         slugify(vm.UGOSVMID),
+		"container_id":           vm.UGOSVMID,
+		"project":                "Virtual machines",
+		"project_slug":           slugify("Virtual machines"),
+		"image":                  firstNonEmpty(vm.SourceName, vm.ISOPath, "Virtual Machine"),
+		"cpu_usage_percent":      vm.CPUPercent,
+		"memory_usage_bytes":     vmMemoryUsageBytes(vm),
+		"memory_current_bytes":   vm.MemoryBytes,
+		"memory_limit_bytes":     vm.MaxMemoryBytes,
+		"memory_available_bytes": vm.MemoryAvailBytes,
+		"memory_unused_bytes":    vm.MemoryUnusedBytes,
+		"memory_rss_bytes":       vm.MemoryRSSBytes,
+		"running":                boolToInt(vm.Running),
+		"state":                  vm.State,
+		"status":                 vmStatus(vm),
+		"ugos_vm_id":             vm.UGOSVMID,
+		"source_name":            vm.SourceName,
+		"iso_path":               vm.ISOPath,
+		"disk_paths":             vm.DiskPaths,
+		"vcpus":                  vm.VCPUs,
+		"disk_read_bytes":        vm.DiskReadBytes,
+		"disk_write_bytes":       vm.DiskWriteBytes,
+		"network_rx_bytes":       vm.NetworkRxBytes,
+		"network_tx_bytes":       vm.NetworkTxBytes,
+	}
+}
+
+func virtualMachinePayload(vm model.VirtualMachineSnapshot, collectedAt time.Time) map[string]any {
+	payload := virtualMachineContainerAttribute(vm)
+	payload["vm"] = vm.Name
+	payload["vm_slug"] = slugify(vm.UGOSVMID)
+	payload["collected_at"] = collectedAt.Format(time.RFC3339)
+	return payload
+}
+
+func vmStatus(vm model.VirtualMachineSnapshot) string {
+	if vm.State == "" || vm.State == "unknown" {
+		return "Unavailable"
+	}
+	return strings.ToUpper(vm.State[:1]) + vm.State[1:]
 }
 
 func containerAttributes(container model.ContainerSnapshot) map[string]any {

@@ -1,15 +1,15 @@
 version: 2
 
-project_name: ugos-exporter
+project_name: ugos-bridge
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: ugos-exporter
-    main: ./exporter
-    binary: ugos-exporter
+  - id: ugos-bridge
+    main: ./bridge
+    binary: ugos-bridge
     env:
       - CGO_ENABLED=0
     goos:
@@ -37,18 +37,18 @@ changelog:
 dockers_v2:
   - id: dockerhub
     ids:
-      - ugos-exporter
-    dockerfile: exporter/Dockerfile.goreleaser
+      - ugos-bridge
+    dockerfile: bridge/Dockerfile.goreleaser
     images:
-      - rcooler/ugos-exporter
+      - rcooler/ugos-bridge
     tags:
       - "{{ .Version }}"
       - "{{ if and (not .IsSnapshot) (not .Prerelease) }}latest{{ end }}"
       - "{{ if and (not .IsSnapshot) (not .Prerelease) }}{{ .Major }}.{{ .Minor }}{{ end }}"
       - "{{ if and (not .IsSnapshot) (not .Prerelease) }}{{ .Major }}{{ end }}"
     labels:
-      org.opencontainers.image.title: ugos-exporter
-      org.opencontainers.image.description: Lightweight UGOS and Docker metrics exporter for NAS hosts and Compose stacks
+      org.opencontainers.image.title: ugos-bridge
+      org.opencontainers.image.description: Lightweight UGOS and Docker metrics bridge for NAS hosts and Compose stacks
       org.opencontainers.image.url: "{{ .GitURL }}"
       org.opencontainers.image.source: "{{ .GitURL }}"
       org.opencontainers.image.version: "{{ .Version }}"
@@ -60,4 +60,3 @@ dockers_v2:
 
 docker_digest:
   name_template: digests.txt
-

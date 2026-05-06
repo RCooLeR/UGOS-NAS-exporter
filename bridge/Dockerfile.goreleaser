@@ -4,16 +4,16 @@ ARG TARGETPLATFORM
 ARG TARGETARCH
 
 RUN apt-get update \
-    && packages="ca-certificates" \
+    && packages="ca-certificates libvirt-clients" \
     && if [ "$TARGETARCH" = "amd64" ]; then packages="$packages intel-gpu-tools"; fi \
     && apt-get install --no-install-recommends -y $packages \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
 
-COPY $TARGETPLATFORM/ugos-exporter /usr/local/bin/ugos-exporter
+COPY $TARGETPLATFORM/ugos-bridge /usr/local/bin/ugos-bridge
 
 EXPOSE 9877
 
-ENTRYPOINT ["/usr/local/bin/ugos-exporter"]
+ENTRYPOINT ["/usr/local/bin/ugos-bridge"]
 

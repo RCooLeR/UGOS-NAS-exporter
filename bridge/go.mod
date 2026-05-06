@@ -1,4 +1,4 @@
-module github.com/RCooLeR/ugos-exporter/exporter
+module github.com/RCooLeR/UgosBridge/bridge
 
 go 1.26
 

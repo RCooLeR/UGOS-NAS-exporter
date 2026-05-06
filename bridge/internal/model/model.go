@@ -118,6 +118,7 @@ type HostSnapshot struct {
 	Sensors     []SensorSnapshot
 	Cooling     []CoolingDeviceSnapshot
 	Processes   []ProcessSnapshot
+	VMs         []VirtualMachineSnapshot
 }
 
 type HostCPUSnapshot struct {
@@ -303,9 +304,33 @@ type CoolingDeviceSnapshot struct {
 }
 
 type ProcessSnapshot struct {
-	Name           string
-	ProcessCount   int
-	CPUPercent     float64
-	MemoryBytes    uint64
-	CPUTimeSeconds float64
+	Name           string  `json:"name"`
+	ProcessCount   int     `json:"process_count"`
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemoryBytes    uint64  `json:"memory_bytes"`
+	CPUTimeSeconds float64 `json:"cpu_time_seconds"`
+}
+
+type VirtualMachineSnapshot struct {
+	UGOSVMID          string   `json:"ugos_vm_id"`
+	Name              string   `json:"name"`
+	SourceName        string   `json:"source_name"`
+	State             string   `json:"state"`
+	Running           bool     `json:"running"`
+	VCPUs             uint64   `json:"vcpus"`
+	CPUPercent        float64  `json:"cpu_percent"`
+	CPUTimeSeconds    float64  `json:"cpu_time_seconds"`
+	MemoryBytes       uint64   `json:"memory_bytes"`
+	MemoryUsageBytes  uint64   `json:"memory_usage_bytes"`
+	MemoryUnusedBytes uint64   `json:"memory_unused_bytes"`
+	MemoryAvailBytes  uint64   `json:"memory_available_bytes"`
+	MemoryRSSBytes    uint64   `json:"memory_rss_bytes"`
+	MaxMemoryBytes    uint64   `json:"max_memory_bytes"`
+	DiskReadBytes     uint64   `json:"disk_read_bytes"`
+	DiskWriteBytes    uint64   `json:"disk_write_bytes"`
+	NetworkRxBytes    uint64   `json:"network_rx_bytes"`
+	NetworkTxBytes    uint64   `json:"network_tx_bytes"`
+	ISOPath           string   `json:"iso_path"`
+	DiskPaths         []string `json:"disk_paths"`
+	DefinitionPresent bool     `json:"definition_present"`
 }

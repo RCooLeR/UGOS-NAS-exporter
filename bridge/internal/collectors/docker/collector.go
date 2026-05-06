@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/dockerapi"
-	"github.com/RCooLeR/ugos-exporter/exporter/internal/model"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/dockerapi"
+	"github.com/RCooLeR/UgosBridge/bridge/internal/model"
 )
 
 type DockerClient interface {

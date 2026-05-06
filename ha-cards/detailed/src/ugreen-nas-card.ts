@@ -406,10 +406,10 @@ export class UgreenNasCard extends LitElement {
 
     return html`
       <section class="panel docker">
-        <div class="panel-title">${svgIcon(mdiViewGridOutline, '#8fc1ff')} <span>Docker Projects</span></div>
+        <div class="panel-title">${svgIcon(mdiViewGridOutline, '#8fc1ff')} <span>Projects</span></div>
         <div class="docker-list">
           ${this._model.dockerProjects.length === 0
-            ? html`<div class="empty-state">No live Docker project entities were found.</div>`
+            ? html`<div class="empty-state">No live project entities were found.</div>`
             : this._model.dockerProjects.map((project) => this.renderDockerProject(project, memoryMax))}
         </div>
       </section>
@@ -530,13 +530,16 @@ export class UgreenNasCard extends LitElement {
     }
 
     if (activeProject.containers.length === 0) {
-      return html`<div class="empty-state">No live containers were linked to this Docker project.</div>`;
+      return activeProject.key === 'virtual_machines'
+        ? html`<div class="empty-state">No live virtual machines were linked to this project.</div>`
+        : html`<div class="empty-state">No live containers were linked to this project.</div>`;
     }
 
     return html`
       <div class="detail-card-stack">
         ${activeProject.containers.map((container) => {
           const logo = this.resolveProjectLogo(activeProject.key);
+          const isVM = activeProject.key === 'virtual_machines';
           const memoryBarWidth = clamp(
             ((container.memoryBytes ?? 0) / Math.max(container.memoryLimitBytes ?? container.memoryBytes ?? 1, 1)) * 100,
             4,
@@ -552,7 +555,7 @@ export class UgreenNasCard extends LitElement {
                   </span>
                   <div>
                     <div class="detail-name">${container.name}</div>
-                    <div class="detail-subtitle">${container.image}</div>
+                    <div class="detail-subtitle">${isVM ? `Source: ${container.image}` : container.image}</div>
                   </div>
                 </div>
                 <span class=${container.running ? 'health' : 'health degraded'}>
@@ -569,7 +572,7 @@ export class UgreenNasCard extends LitElement {
                   <strong>${formatBytes(container.memoryBytes, 0)}</strong>
                 </div>
                 <div class="detail-metric-card">
-                  <span>Limit</span>
+                  <span>${isVM ? 'Max RAM' : 'Limit'}</span>
                   <strong>${container.memoryLimitBytes ? formatBytes(container.memoryLimitBytes, 0) : 'N/A'}</strong>
                 </div>
                 <div class="detail-metric-card">
@@ -877,7 +880,10 @@ export class UgreenNasCard extends LitElement {
     }
     if (this._detailSelection.kind === 'project') {
       const project = this.activeDockerProject();
-      return { label: project ? `${project.title} Containers` : 'Docker Project', icon: mdiViewGridOutline };
+      if (project?.key === 'virtual_machines') {
+        return { label: 'Virtual machines', icon: mdiViewGridOutline };
+      }
+      return { label: project ? `${project.title} Containers` : 'Project', icon: mdiViewGridOutline };
     }
     if (this._detailSelection.kind === 'metric') {
       switch (this._detailSelection.key) {
@@ -1200,7 +1206,7 @@ if (!window.customCards.some((card) => card.type === CUSTOM_CARD_TYPE)) {
   window.customCards.push({
     type: CUSTOM_CARD_TYPE,
     name: 'UGREEN NAS Card',
-    description: 'Large UGREEN DXP6800 Pro monitoring card with hardware, storage, docker, and network sections.',
+    description: 'Large UGREEN DXP6800 Pro monitoring card with hardware, storage, projects, virtual machines, and network sections.',
     preview: true,
     documentationURL: 'https://developers.home-assistant.io/docs/frontend/custom-ui/custom-card'
   });

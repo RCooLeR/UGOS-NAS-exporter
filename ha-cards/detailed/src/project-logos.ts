@@ -1,4 +1,4 @@
-import { mdiChartLine, mdiDatabase, mdiHexagonMultipleOutline } from '@mdi/js';
+import { mdiChartLine, mdiDatabase, mdiDesktopTowerMonitor, mdiHexagonMultipleOutline } from '@mdi/js';
 import {
   siGitea,
   siGrafana,
@@ -75,6 +75,7 @@ export const projectLogos: Record<string, ProjectLogo> = {
   kuma: pathLogo(siUptimekuma.path, `#${siUptimekuma.hex}`),
   kuma_monitoring: pathLogo(siUptimekuma.path, `#${siUptimekuma.hex}`),
   monitoring: pathLogo(siGrafana.path, `#${siGrafana.hex}`),
+  virtual_machines: pathLogo(mdiDesktopTowerMonitor, THEME_COLORS.cyan),
   'uptime-kuma': pathLogo(siUptimekuma.path, `#${siUptimekuma.hex}`),
   uptime_kuma: pathLogo(siUptimekuma.path, `#${siUptimekuma.hex}`),
   nas: imageLogo(
