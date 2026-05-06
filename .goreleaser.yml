@@ -4,11 +4,12 @@ project_name: ugos-bridge
 
 before:
   hooks:
-    - go mod tidy
+    - go -C bridge mod tidy
 
 builds:
   - id: ugos-bridge
-    main: ./bridge
+    dir: bridge
+    main: .
     binary: ugos-bridge
     env:
       - CGO_ENABLED=0
