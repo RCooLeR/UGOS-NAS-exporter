@@ -18,11 +18,27 @@ COPY . .
 ENV GO111MODULE=on
 
 # Download deps
-RUN go mod download
+RUN if [ -f /app/exporter/go.mod ]; then \
+        cd /app/exporter; \
+    elif [ -f /app/go.mod ]; then \
+        cd /app; \
+    else \
+        echo "go.mod not found in /app or /app/exporter" >&2; \
+        exit 1; \
+    fi \
+    && go mod download
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
-    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-    -o /ugos-exporter ./exporter
+RUN if [ -f /app/exporter/go.mod ]; then \
+        cd /app/exporter; \
+    elif [ -f /app/go.mod ]; then \
+        cd /app; \
+    else \
+        echo "go.mod not found in /app or /app/exporter" >&2; \
+        exit 1; \
+    fi \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath \
+        -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+        -o /ugos-exporter .
 
 FROM debian:bookworm-slim
 

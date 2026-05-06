@@ -68,6 +68,7 @@ type binarySensorDefinition struct {
 
 type deviceDescriptor struct {
 	ID           string
+	EntityID     string
 	Name         string
 	ViaDeviceID  string
 	Manufacturer string
@@ -279,9 +280,6 @@ func (p *MQTTPublisher) PublishSnapshot(snapshot model.Snapshot) error {
 			continue
 		}
 		if err := p.publishRaw(entity.discoveryTopic, ""); err != nil {
-			return err
-		}
-		if err := p.publishRaw(entity.stateTopic, ""); err != nil {
 			return err
 		}
 		delete(p.discoveredEntities, key)
@@ -663,11 +661,11 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 				entityKey := fmt.Sprintf("bond_slave:%s:%s:%s", slug, slaveSlug, key)
 				discoveryTopic := p.discoveryTopic("sensor", "bond_"+slug+"_slave_"+slaveSlug, def.ObjectID)
 				if err := p.ensureSensor(discoveryTopic, slaveStateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, slave.Name), def, deviceDescriptor{
-					ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slaveSlug),
-					Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, slave.Name),
+					ID:           fmt.Sprintf("%s_bond_%s_slave_%s", hostDeviceID, slug, slaveSlug),
+					Name:         fmt.Sprintf("%s Bond %s Slave %s", hostSnapshot.Name, bond.Name, slave.Name),
 					ViaDeviceID:  deviceID,
 					Manufacturer: "RCooLeR",
-					Model:        "Network Interface",
+					Model:        "Bond Slave Interface",
 				}); err != nil {
 					return err
 				}
@@ -676,11 +674,11 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 				entityKey := fmt.Sprintf("bond_slave_binary:%s:%s:%s", slug, slaveSlug, key)
 				discoveryTopic := p.discoveryTopic("binary_sensor", "bond_"+slug+"_slave_"+slaveSlug, def.ObjectID)
 				if err := p.ensureBinarySensor(discoveryTopic, slaveStateTopic, currentEntities, entityKey, fmt.Sprintf("%s %s", hostSnapshot.Name, slave.Name), def, deviceDescriptor{
-					ID:           fmt.Sprintf("%s_network_%s", hostDeviceID, slaveSlug),
-					Name:         fmt.Sprintf("%s Network %s", hostSnapshot.Name, slave.Name),
+					ID:           fmt.Sprintf("%s_bond_%s_slave_%s", hostDeviceID, slug, slaveSlug),
+					Name:         fmt.Sprintf("%s Bond %s Slave %s", hostSnapshot.Name, bond.Name, slave.Name),
 					ViaDeviceID:  deviceID,
 					Manufacturer: "RCooLeR",
-					Model:        "Network Interface",
+					Model:        "Bond Slave Interface",
 				}); err != nil {
 					return err
 				}
@@ -809,6 +807,7 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 		discoveryTopic := p.discoveryTopic("sensor", sensorSlug, def.ObjectID)
 		device := deviceDescriptor{
 			ID:           fmt.Sprintf("%s_health_%s", hostDeviceID, chipSlug),
+			EntityID:     fmt.Sprintf("%s_sensor_%s", hostDeviceID, sensorSlug),
 			Name:         fmt.Sprintf("%s Health %s", hostSnapshot.Name, sensor.Chip),
 			ViaDeviceID:  hostDeviceID,
 			Manufacturer: "RCooLeR",
@@ -818,6 +817,7 @@ func (p *MQTTPublisher) publishHost(snapshot model.Snapshot, currentEntities map
 		if sensor.DeviceType == "disk" && sensor.DeviceName != "" {
 			device = deviceDescriptor{
 				ID:           fmt.Sprintf("%s_disk_%s", hostDeviceID, slugify(sensor.DeviceName)),
+				EntityID:     fmt.Sprintf("%s_disk_%s_sensor_%s", hostDeviceID, slugify(sensor.DeviceName), sensorSlug),
 				Name:         fmt.Sprintf("%s Disk %s", hostSnapshot.Name, sensor.DeviceName),
 				ViaDeviceID:  hostDeviceID,
 				Manufacturer: "RCooLeR",
@@ -874,6 +874,8 @@ func (p *MQTTPublisher) ensureSensor(discoveryTopic string, stateTopic string, c
 		return nil
 	}
 
+	entityID := firstNonEmpty(device.EntityID, device.ID)
+
 	devicePayload := map[string]any{
 		"identifiers": []string{device.ID},
 		"name":        device.Name,
@@ -890,8 +892,8 @@ func (p *MQTTPublisher) ensureSensor(discoveryTopic string, stateTopic string, c
 
 	payload := map[string]any{
 		"name":                  strings.TrimSpace(fmt.Sprintf("%s %s", entityName, def.NameSuffix)),
-		"unique_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
-		"object_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
+		"unique_id":             fmt.Sprintf("%s_%s", entityID, def.ObjectID),
+		"object_id":             fmt.Sprintf("%s_%s", entityID, def.ObjectID),
 		"state_topic":           stateTopic,
 		"json_attributes_topic": stateTopic,
 		"value_template":        fmt.Sprintf("{{ value_json.%s }}", def.ValueKey),
@@ -929,6 +931,8 @@ func (p *MQTTPublisher) ensureBinarySensor(discoveryTopic string, stateTopic str
 		return nil
 	}
 
+	entityID := firstNonEmpty(device.EntityID, device.ID)
+
 	devicePayload := map[string]any{
 		"identifiers": []string{device.ID},
 		"name":        device.Name,
@@ -945,8 +949,8 @@ func (p *MQTTPublisher) ensureBinarySensor(discoveryTopic string, stateTopic str
 
 	payload := map[string]any{
 		"name":                  strings.TrimSpace(fmt.Sprintf("%s %s", entityName, def.NameSuffix)),
-		"unique_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
-		"object_id":             fmt.Sprintf("%s_%s", device.ID, def.ObjectID),
+		"unique_id":             fmt.Sprintf("%s_%s", entityID, def.ObjectID),
+		"object_id":             fmt.Sprintf("%s_%s", entityID, def.ObjectID),
 		"state_topic":           stateTopic,
 		"json_attributes_topic": stateTopic,
 		"value_template":        def.ValueTemplate,

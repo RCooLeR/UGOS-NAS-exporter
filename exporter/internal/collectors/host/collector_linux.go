@@ -374,6 +374,11 @@ func (c *Collector) attachIntelGPUTopMetrics(gpus []model.GPUSnapshot) {
 			WaitPercent: engine.Wait,
 		})
 	}
+
+	if busyPercent, ok := maxGPUEngineBusyPercent(gpus[targetIndex].IntelTop.Engines); ok {
+		gpus[targetIndex].BusyPercent = busyPercent
+		gpus[targetIndex].BusyAvailable = true
+	}
 }
 
 func (c *Collector) collectIntelGPUTopSample() (intelGPUTopSample, error) {
