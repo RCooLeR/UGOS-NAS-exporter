@@ -3,6 +3,7 @@ package mqttoutput
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,12 +20,13 @@ type publishedMessage struct {
 }
 
 type recordingClient struct {
-	publishes []publishedMessage
+	connectionOpen bool
+	publishes      []publishedMessage
 }
 
 func (c *recordingClient) IsConnected() bool { return true }
 
-func (c *recordingClient) IsConnectionOpen() bool { return true }
+func (c *recordingClient) IsConnectionOpen() bool { return c.connectionOpen }
 
 func (c *recordingClient) Connect() mqtt.Token { return stubToken{} }
 
@@ -70,8 +72,34 @@ func (stubToken) Done() <-chan struct{} {
 
 func (stubToken) Error() error { return nil }
 
-func TestPublishSnapshotClearsDiscoveryWithoutClearingState(t *testing.T) {
+func TestPublishSnapshotReturnsWhenConnectionIsNotOpen(t *testing.T) {
 	client := &recordingClient{}
+	publisher := &MQTTPublisher{
+		client: client,
+		cfg: MQTTConfig{
+			Broker: "tcp://mqtt:1883",
+			QoS:    1,
+			Retain: true,
+		},
+		discoveredEntities: map[string]publishedEntity{},
+	}
+
+	err := publisher.PublishSnapshot(model.Snapshot{
+		Projects: []model.ProjectSnapshot{{Name: "apps"}},
+	})
+	if err == nil {
+		t.Fatal("expected error when MQTT connection is not open")
+	}
+	if !strings.Contains(err.Error(), "is not connected") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := len(client.publishes); got != 0 {
+		t.Fatalf("expected no publishes, got %d", got)
+	}
+}
+
+func TestPublishSnapshotClearsDiscoveryWithoutClearingState(t *testing.T) {
+	client := &recordingClient{connectionOpen: true}
 	publisher := &MQTTPublisher{
 		client: client,
 		cfg: MQTTConfig{
@@ -104,7 +132,7 @@ func TestPublishSnapshotClearsDiscoveryWithoutClearingState(t *testing.T) {
 }
 
 func TestHealthSensorsUseUniqueEntityIDsPerSensor(t *testing.T) {
-	client := &recordingClient{}
+	client := &recordingClient{connectionOpen: true}
 	publisher := &MQTTPublisher{
 		client:             client,
 		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},
@@ -139,7 +167,7 @@ func TestHealthSensorsUseUniqueEntityIDsPerSensor(t *testing.T) {
 }
 
 func TestBondSlaveEntitiesDoNotReuseNetworkEntityIDs(t *testing.T) {
-	client := &recordingClient{}
+	client := &recordingClient{connectionOpen: true}
 	publisher := &MQTTPublisher{
 		client:             client,
 		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},
@@ -185,7 +213,7 @@ func TestBondSlaveEntitiesDoNotReuseNetworkEntityIDs(t *testing.T) {
 }
 
 func TestChildDeviceDiscoveryPublishesParentsFirst(t *testing.T) {
-	client := &recordingClient{}
+	client := &recordingClient{connectionOpen: true}
 	publisher := &MQTTPublisher{
 		client:             client,
 		cfg:                MQTTConfig{TopicPrefix: "ugos_bridge", DiscoveryPrefix: "homeassistant"},

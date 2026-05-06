@@ -373,7 +373,11 @@ func run(cfg config) error {
 
 		if publisher != nil && (lastMQTTPublish.IsZero() || time.Since(lastMQTTPublish) >= cfg.MQTTInterval) {
 			if err := publisher.PublishSnapshot(snapshot); err != nil {
-				logger.Error().Err(err).Msg("failed to publish snapshot to MQTT")
+				if errors.Is(err, mqttoutput.ErrNotConnected) {
+					logger.Warn().Err(err).Msg("MQTT broker is not connected; skipping snapshot publish")
+				} else {
+					logger.Error().Err(err).Msg("failed to publish snapshot to MQTT")
+				}
 			} else {
 				lastMQTTPublish = time.Now()
 			}

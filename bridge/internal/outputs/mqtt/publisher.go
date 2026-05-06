@@ -2,6 +2,7 @@ package mqttoutput
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,6 +16,8 @@ import (
 )
 
 var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
+
+var ErrNotConnected = errors.New("mqtt broker is not connected")
 
 type MQTTConfig struct {
 	Broker             string
@@ -235,6 +238,7 @@ func NewMQTTPublisher(cfg MQTTConfig) (*MQTTPublisher, error) {
 	opts.SetPassword(cfg.Password)
 	opts.SetAutoReconnect(true)
 	opts.SetConnectRetry(true)
+	opts.SetConnectRetryInterval(cfg.ConnectTimeout)
 	opts.SetConnectTimeout(cfg.ConnectTimeout)
 	opts.SetCleanSession(false)
 	opts.SetOrderMatters(false)
@@ -253,7 +257,11 @@ func NewMQTTPublisher(cfg MQTTConfig) (*MQTTPublisher, error) {
 	p.client = mqtt.NewClient(opts)
 	connectToken := p.client.Connect()
 	if !connectToken.WaitTimeout(cfg.ConnectTimeout) {
-		return nil, fmt.Errorf("timeout connecting to MQTT broker %q", cfg.Broker)
+		p.log.Warn().
+			Str("broker", cfg.Broker).
+			Dur("timeout", cfg.ConnectTimeout).
+			Msg("timeout connecting to MQTT broker; will retry in background")
+		return p, nil
 	}
 	if err := connectToken.Error(); err != nil {
 		return nil, fmt.Errorf("connect to MQTT broker %q: %w", cfg.Broker, err)
@@ -274,6 +282,10 @@ func (p *MQTTPublisher) Close() {
 func (p *MQTTPublisher) PublishSnapshot(snapshot model.Snapshot) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.client == nil || !p.client.IsConnectionOpen() {
+		return fmt.Errorf("%w: %q", ErrNotConnected, p.cfg.Broker)
+	}
 
 	currentEntities := map[string]publishedEntity{}
 
